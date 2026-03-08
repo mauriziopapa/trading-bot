@@ -31,11 +31,14 @@ def _list(key: str, default: str) -> list[str]:
     raw = os.getenv(key, default)
     return [s.strip() for s in raw.split(",") if s.strip()]
 
+# ─── Dashboard ──────────────────────────────────────────────────────────────
+ENABLE_DASHBOARD = _bool("ENABLE_DASHBOARD", True)
+DASHBOARD_PORT   = _int("DASHBOARD_PORT", 8080)
 
 # ─── Exchange ────────────────────────────────────────────────────────────────
-BITGET_API_KEY      = os.getenv("BITGET_API_KEY", "")
-BITGET_SECRET       = os.getenv("BITGET_SECRET", "")
-BITGET_PASSPHRASE   = os.getenv("BITGET_PASSPHRASE", "")
+BITGET_API_KEY      = os.getenv("BITGET_API_KEY", "bg_39ebbad09373e4b960361284e67595b7")
+BITGET_SECRET       = os.getenv("BITGET_SECRET", "06d4df69a93f9fbb5045dac509a53a2634f1dafa7216796fb42dfffbf55f7fa5")
+BITGET_PASSPHRASE   = os.getenv("BITGET_PASSPHRASE", "Tommaso14072024")
 
 # ─── Mode ────────────────────────────────────────────────────────────────────
 TRADING_MODE        = os.getenv("TRADING_MODE", "paper")       # paper | live
