@@ -12,7 +12,7 @@ import pandas as pd
 from loguru import logger
 
 from trading_bot.strategies.base import BaseStrategy, Signal
-from src.utils import indicators as ind
+from trading_bot.utils import indicators as ind
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.config import settings
 
