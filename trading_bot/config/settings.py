@@ -82,7 +82,7 @@ NOTIFY_ERRORS       = _bool("NOTIFY_ERRORS",       True)
 NOTIFY_DAILY_REPORT = _bool("NOTIFY_DAILY_REPORT", True)
 
 # ─── Database ────────────────────────────────────────────────────────────────
-DATABASE_URL        = os.getenv("DATABASE_URL", "")
+DATABASE_URL        = os.getenv("DATABASE_URL", "postgresql://postgres:vPQMRweVJZFxhRcNdmOsEMNorlzryQQS@postgres.railway.internal:5432/railway")
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 LOG_LEVEL           = os.getenv("LOG_LEVEL", "INFO")
