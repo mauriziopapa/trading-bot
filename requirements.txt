@@ -1,0 +1,25 @@
+
+# ─── Data & Analysis ────────────────────────────────────
+# ─── Database ───────────────────────────────────────────
+# ─── Exchange ───────────────────────────────────────────
+# ─── Notifications ──────────────────────────────────────
+# ─── Utilities ──────────────────────────────────────────
+aiohttp==3.9.1
+ccxt
+ccxt==4.2.25
+fastapi
+loguru
+loguru==0.7.2
+numpy==2.2.6
+pandas
+pandas==2.2.3
+psycopg2-binary
+psycopg2-binary==2.9.9
+python-dotenv==1.0.0
+python-telegram-bot==20.7
+requests==2.31.0
+schedule
+schedule==1.2.1
+sqlalchemy
+sqlalchemy==2.0.25
+uvicorn
