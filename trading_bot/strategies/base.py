@@ -44,5 +44,5 @@ class BaseStrategy:
         raise NotImplementedError
 
     def _atr_value(self, df: pd.DataFrame) -> float:
-        from src.utils.indicators import atr
+        from trading_bot.utils.indicators import atr
         return float(atr(df["high"], df["low"], df["close"]).iloc[-1])
