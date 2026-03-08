@@ -21,12 +21,17 @@ from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
 
-# --- Dashboard integration (opzionale) --------------------------------------
-try:
-    from dashboard.state_writer import write_state
-    DASHBOARD_ENABLED = True
-except ImportError:
+# --- Dashboard integration ---------------------------------------------------
+if settings.ENABLE_DASHBOARD:
+    try:
+        from trading_bot.dashboard.state_writer import write_state
+        DASHBOARD_ENABLED = True
+    except Exception as e:
+        DASHBOARD_ENABLED = False
+        write_state = None
+else:
     DASHBOARD_ENABLED = False
+    write_state = None
 
 # --- Logger globale per buffer dashboard ------------------------------------
 _bot_ref = None   # assegnato in TradingBot.start()
