@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bitget Bot — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Base ──────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #FAFAF9;
+    --surface:   #FFFFFF;
+    --border:    #E8E8E5;
+    --border2:   #F0F0ED;
+    --text:      #1A1A18;
+    --text2:     #6B6B67;
+    --text3:     #9B9B96;
+    --accent:    #111110;
+    --green:     #18794E;
+    --green-bg:  #EFFAF4;
+    --red:       #CE2C31;
+    --red-bg:    #FFF0F0;
+    --yellow:    #AD5700;
+    --yellow-bg: #FFF8E6;
+    --blue:      #006ADC;
+    --blue-bg:   #EFF6FF;
+    --mono:      'DM Mono', monospace;
+    --sans:      'DM Sans', sans-serif;
+    --radius:    8px;
+    --shadow:    0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+  }
+
+  html { font-size: 14px; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ── Layout ────────────────────────────────────────────── */
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 28px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-weight: 600; font-size: 14px; letter-spacing: -.2px;
+  }
+  .logo-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-bg);
+    animation: pulse 2s infinite;
+  }
+  .logo-dot.offline { background: var(--red); box-shadow: 0 0 0 3px var(--red-bg); animation: none; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+  }
+
+  .header-right {
+    display: flex; align-items: center; gap: 16px;
+    font-size: 12px; color: var(--text2);
+    font-family: var(--mono);
+  }
+
+  .mode-badge {
+    padding: 3px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 500;
+    letter-spacing: .5px; text-transform: uppercase;
+  }
+  .mode-badge.paper { background: var(--yellow-bg); color: var(--yellow); }
+  .mode-badge.live  { background: var(--green-bg);  color: var(--green); }
+
+  main {
+    flex: 1;
+    padding: 24px 28px;
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  /* ── Grid ──────────────────────────────────────────────── */
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+
+  @media (max-width: 1100px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 900px)  { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  @media (max-width: 600px)  { .grid-4 { grid-template-columns: 1fr 1fr; } main { padding: 16px; } }
+
+  /* ── Cards ─────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .card-header {
+    padding: 14px 16px 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-title {
+    font-size: 11px; font-weight: 500; letter-spacing: .6px;
+    text-transform: uppercase; color: var(--text3);
+  }
+  .card-body { padding: 8px 16px 16px; }
+
+  /* ── KPI Cards ─────────────────────────────────────────── */
+  .kpi .card-body { padding: 12px 16px 16px; }
+  .kpi-value {
+    font-size: 26px; font-weight: 600;
+    letter-spacing: -1px; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 4px;
+  }
+  .kpi-sub {
+    font-size: 11px; color: var(--text3);
+    font-family: var(--mono);
+  }
+  .kpi-delta {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 11px; font-weight: 500;
+    padding: 2px 6px; border-radius: 4px;
+    margin-top: 6px; font-family: var(--mono);
+  }
+  .up   { background: var(--green-bg); color: var(--green); }
+  .down { background: var(--red-bg);   color: var(--red); }
+  .flat { background: var(--border2);  color: var(--text2); }
+
+  /* ── Section Titles ────────────────────────────────────── */
+  .section-title {
+    font-size: 12px; font-weight: 600;
+    color: var(--text); letter-spacing: -.1px;
+    margin-bottom: 10px;
+  }
+
+  /* ── Positions Table ───────────────────────────────────── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; padding: 8px 12px;
+    font-size: 10px; font-weight: 500;
+    text-transform: uppercase; letter-spacing: .5px;
+    color: var(--text3); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border2);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg); }
+
+  .mono { font-family: var(--mono); font-size: 12px; }
+
+  .tag {
+    display: inline-block; padding: 2px 7px;
+    border-radius: 4px; font-size: 10px; font-weight: 500;
+    letter-spacing: .3px;
+  }
+  .tag-buy    { background: var(--green-bg); color: var(--green); }
+  .tag-sell   { background: var(--red-bg);   color: var(--red); }
+  .tag-spot   { background: var(--blue-bg);  color: var(--blue); }
+  .tag-futures{ background: #F3F0FF;          color: #6E56CF; }
+  .tag-paper  { background: var(--yellow-bg); color: var(--yellow); }
+
+  .pnl-pos { color: var(--green); font-weight: 500; font-family: var(--mono); }
+  .pnl-neg { color: var(--red);   font-weight: 500; font-family: var(--mono); }
+
+  .empty-state {
+    text-align: center; padding: 32px 16px;
+    color: var(--text3); font-size: 13px;
+  }
+
+  /* ── Signals Feed ──────────────────────────────────────── */
+  .signals-list { display: flex; flex-direction: column; gap: 1px; }
+
+  .signal-item {
+    padding: 10px 16px;
+    display: grid;
+    grid-template-columns: 64px 1fr auto;
+    gap: 10px; align-items: center;
+    border-bottom: 1px solid var(--border2);
+    transition: background .1s;
+  }
+  .signal-item:hover { background: var(--bg); }
+  .signal-item:last-child { border-bottom: none; }
+
+  .signal-time { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+  .signal-main { min-width: 0; }
+  .signal-pair { font-weight: 500; font-size: 13px; }
+  .signal-meta { font-size: 11px; color: var(--text2); margin-top: 1px; }
+  .signal-right { text-align: right; }
+  .signal-conf {
+    font-family: var(--mono); font-size: 12px;
+    font-weight: 500;
+  }
+  .conf-high { color: var(--green); }
+  .conf-mid  { color: var(--yellow); }
+  .conf-low  { color: var(--text3); }
+
+  .signal-status {
+    font-size: 10px; margin-top: 2px; color: var(--text3);
+  }
+  .signal-status.executed { color: var(--green); }
+
+  /* ── Logs ──────────────────────────────────────────────── */
+  .log-container {
+    background: #FAFAF9;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    overflow-y: auto;
+    max-height: 340px;
+    padding: 12px;
+  }
+
+  .log-line {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 2px 0;
+    border-bottom: 1px solid transparent;
+    transition: background .1s;
+  }
+  .log-line:hover { background: rgba(0,0,0,.025); border-radius: 3px; }
+  .log-line.new { animation: fadeIn .3s ease; }
+
+  @keyframes fadeIn {
+    from { background: #E8F5FF; }
+    to   { background: transparent; }
+  }
+
+  .log-ts  { color: var(--text3); flex-shrink: 0; font-size: 10px; }
+  .log-lvl { flex-shrink: 0; width: 44px; font-size: 10px; font-weight: 500; }
+  .log-lvl.INFO    { color: var(--blue); }
+  .log-lvl.DEBUG   { color: var(--text3); }
+  .log-lvl.WARNING { color: var(--yellow); }
+  .log-lvl.ERROR   { color: var(--red); }
+  .log-msg { color: var(--text); word-break: break-all; }
+
+  .log-filter {
+    display: flex; gap: 6px; padding: 12px 16px 8px;
+    border-bottom: 1px solid var(--border2);
+  }
+  .filter-btn {
+    padding: 3px 9px; border-radius: 4px;
+    font-size: 10px; font-weight: 500; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text2); font-family: var(--sans);
+    transition: all .15s;
+  }
+  .filter-btn:hover { border-color: var(--text3); }
+  .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ── Stats Row ─────────────────────────────────────────── */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: var(--border);
+    border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .stat-cell {
+    background: var(--surface);
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat-val { font-size: 20px; font-weight: 600; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  .stat-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+
+  /* ── Scrollbar ─────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  /* ── Update flash ──────────────────────────────────────── */
+  .updated { animation: flash .4s ease; }
+  @keyframes flash {
+    0%  { background: #E8F5FF; }
+    100%{ background: transparent; }
+  }
+
+  .conn-status {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 11px;
+  }
+  .conn-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+  }
+  .conn-dot.disconnected { background: var(--red); }
+</style>
+</head>
+
+<body>
+<div class="app">
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-dot" id="statusDot"></div>
+      Bitget Bot
+    </div>
+    <div class="header-right">
+      <div class="conn-status">
+        <div class="conn-dot" id="connDot"></div>
+        <span id="connLabel">connessione...</span>
+      </div>
+      <span class="mode-badge paper" id="modeBadge">PAPER</span>
+      <span id="lastUpdate">—</span>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- ── KPI Row ──────────────────────────────────────── -->
+    <div class="grid-4">
+
+      <div class="card kpi">
+        <div class="card-header"><span class="card-title">Saldo Spot</span></div>
+        <div class="card-body">
+          <div class="kpi-value" id="kpiSpot">—</div>
+          <div class="kpi-sub">USDT disponibili</div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="card-header"><span class="card-title">Saldo Futures</span></div>
+        <div class="card-body">
+          <div class="kpi-value" id="kpiFutures">—</div>
+          <div class="kpi-sub">USDT margine</div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="card-header"><span class="card-title">Totale Portfolio</span></div>
+        <div class="card-body">
+          <div class="kpi-value" id="kpiTotal">—</div>
+          <div id="kpiDeltaWrap"></div>
+        </div>
+      </div>
+
+      <div class="card kpi">
+        <div class="card-header"><span class="card-title">Performance Oggi</span></div>
+        <div class="card-body">
+          <div class="kpi-value" id="kpiPnl">—</div>
+          <div class="kpi-sub" id="kpiPnlSub">PnL giornaliero</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Stats Bar ─────────────────────────────────────── -->
+    <div style="margin-bottom:20px">
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-cell"><div class="stat-val" id="statTrades">—</div><div class="stat-lbl">Trades Totali</div></div>
+        <div class="stat-cell"><div class="stat-val" id="statWinRate">—</div><div class="stat-lbl">Win Rate</div></div>
+        <div class="stat-cell"><div class="stat-val" id="statAvgWin">—</div><div class="stat-lbl">Avg Win</div></div>
+        <div class="stat-cell"><div class="stat-val" id="statAvgLoss">—</div><div class="stat-lbl">Avg Loss</div></div>
+      </div>
+    </div>
+
+    <!-- ── Positions + Signals ──────────────────────────── -->
+    <div class="grid-2">
+
+      <!-- Posizioni Aperte -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Posizioni Aperte</span>
+          <span class="mono" id="posCount" style="font-size:11px;color:var(--text3)">0</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Coppia</th>
+                  <th>Dir.</th>
+                  <th>Entry</th>
+                  <th>Prezzo</th>
+                  <th>PnL</th>
+                  <th>Strategia</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody">
+                <tr><td colspan="6" class="empty-state">Nessuna posizione aperta</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Segnali Recenti -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Segnali Recenti</span>
+          <span style="font-size:11px;color:var(--text3)" id="sigCount">0</span>
+        </div>
+        <div class="signals-list" id="signalsList">
+          <div class="empty-state">Nessun segnale</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Log ──────────────────────────────────────────── -->
+    <div class="card">
+      <div class="card-header" style="padding-bottom:0">
+        <span class="card-title">Log Bot</span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);cursor:pointer">
+          <input type="checkbox" id="autoScroll" checked style="accent-color:var(--accent)">
+          Auto-scroll
+        </label>
+      </div>
+      <div class="log-filter">
+        <button class="filter-btn active" data-lvl="ALL"     onclick="setFilter(this)">Tutti</button>
+        <button class="filter-btn"        data-lvl="INFO"    onclick="setFilter(this)">INFO</button>
+        <button class="filter-btn"        data-lvl="WARNING" onclick="setFilter(this)">WARN</button>
+        <button class="filter-btn"        data-lvl="ERROR"   onclick="setFilter(this)">ERROR</button>
+        <button class="filter-btn"        data-lvl="DEBUG"   onclick="setFilter(this)">DEBUG</button>
+      </div>
+      <div class="log-container" id="logContainer"></div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────
+let wsConn = null;
+let logFilter = 'ALL';
+let allLogs   = [];
+let reconnectTimer = null;
+
+// ── WebSocket ────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url   = `${proto}://${location.host}/ws`;
+
+  wsConn = new WebSocket(url);
+
+  wsConn.onopen = () => {
+    setConnected(true);
+    clearTimeout(reconnectTimer);
+    // keep-alive ping ogni 20s
+    setInterval(() => { if (wsConn.readyState === 1) wsConn.send('ping'); }, 20000);
+  };
+
+  wsConn.onmessage = ({ data }) => {
+    try {
+      const msg = JSON.parse(data);
+      if (msg.type === 'state') render(msg.data);
+    } catch(e) {}
+  };
+
+  wsConn.onerror = () => setConnected(false);
+  wsConn.onclose = () => {
+    setConnected(false);
+    reconnectTimer = setTimeout(connect, 4000);
+  };
+}
+
+function setConnected(ok) {
+  document.getElementById('connDot').className   = 'conn-dot' + (ok ? '' : ' disconnected');
+  document.getElementById('connLabel').textContent = ok ? 'live' : 'disconnesso';
+}
+
+// ── Render ───────────────────────────────────────────────
+function render(state) {
+  renderKPIs(state.balance);
+  renderStats(state.stats);
+  renderPositions(state.positions || []);
+  renderSignals(state.signals || []);
+  renderLogs(state.logs || []);
+  renderMeta(state);
+}
+
+function renderKPIs(b) {
+  if (!b) return;
+  set('kpiSpot',    fmt(b.spot));
+  set('kpiFutures', fmt(b.futures));
+  set('kpiTotal',   fmt(b.total));
+
+  const sign  = b.pnl_today_pct >= 0 ? '+' : '';
+  const cls   = b.pnl_today_pct > 0 ? 'up' : b.pnl_today_pct < 0 ? 'down' : 'flat';
+  const arrow = b.pnl_today_pct > 0 ? '↑' : b.pnl_today_pct < 0 ? '↓' : '→';
+
+  document.getElementById('kpiDeltaWrap').innerHTML =
+    `<span class="kpi-delta ${cls}">${arrow} ${sign}${b.pnl_today_pct.toFixed(2)}% (${sign}${b.pnl_today_usdt.toFixed(2)} USDT)</span>`;
+
+  const pnlEl = document.getElementById('kpiPnl');
+  pnlEl.textContent = `${sign}${b.pnl_today_pct.toFixed(2)}%`;
+  pnlEl.style.color = b.pnl_today_pct > 0 ? 'var(--green)' : b.pnl_today_pct < 0 ? 'var(--red)' : 'var(--text)';
+  set('kpiPnlSub', `${sign}${b.pnl_today_usdt.toFixed(2)} USDT oggi`);
+}
+
+function renderStats(s) {
+  if (!s) return;
+  set('statTrades',  s.total_trades ?? '—');
+  set('statWinRate', s.win_rate != null ? s.win_rate.toFixed(1) + '%' : '—');
+  set('statAvgWin',  s.avg_win_pct  != null ? '+' + s.avg_win_pct.toFixed(2) + '%' : '—');
+  set('statAvgLoss', s.avg_loss_pct != null ? '-' + s.avg_loss_pct.toFixed(2) + '%' : '—');
+
+  const winEl  = document.getElementById('statWinRate');
+  const wrate  = s.win_rate || 0;
+  winEl.style.color = wrate >= 55 ? 'var(--green)' : wrate >= 45 ? 'var(--yellow)' : 'var(--red)';
+}
+
+function renderPositions(positions) {
+  const tbody = document.getElementById('positionsBody');
+  set('posCount', positions.length);
+
+  if (!positions.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Nessuna posizione aperta</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = positions.map(p => {
+    const mkt    = p.market === 'futures' ? 'tag-futures' : 'tag-spot';
+    const dir    = p.side === 'buy' ? 'tag-buy' : 'tag-sell';
+    const pnlCls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const sign   = p.pnl_pct >= 0 ? '+' : '';
+    const sym    = p.symbol.replace(':USDT','');
+    return `
+      <tr>
+        <td>
+          <div style="font-weight:500;font-size:13px">${sym}</div>
+          <div style="margin-top:2px"><span class="tag ${mkt}">${p.market}</span></div>
+        </td>
+        <td><span class="tag ${dir}">${p.side === 'buy' ? 'LONG' : 'SHORT'}</span></td>
+        <td class="mono">${p.entry.toLocaleString('it-IT', {minimumFractionDigits:2})}</td>
+        <td class="mono">${p.current.toLocaleString('it-IT', {minimumFractionDigits:2})}</td>
+        <td>
+          <div class="${pnlCls}">${sign}${p.pnl_pct.toFixed(2)}%</div>
+          <div style="font-size:11px;color:var(--text3)">${sign}${p.pnl_usdt.toFixed(2)} USDT</div>
+        </td>
+        <td style="font-size:12px;color:var(--text2)">${p.strategy}</td>
+      </tr>`;
+  }).join('');
+}
+
+function renderSignals(signals) {
+  const el = document.getElementById('signalsList');
+  set('sigCount', signals.length);
+
+  if (!signals.length) {
+    el.innerHTML = '<div class="empty-state">Nessun segnale</div>';
+    return;
+  }
+
+  // Mostra gli ultimi 8
+  const recent = [...signals].reverse().slice(0, 8);
+  el.innerHTML = recent.map(s => {
+    const dir    = s.side === 'buy' ? 'tag-buy' : 'tag-sell';
+    const mkt    = s.market === 'futures' ? 'tag-futures' : 'tag-spot';
+    const conf   = s.confidence;
+    const confCls = conf >= 75 ? 'conf-high' : conf >= 65 ? 'conf-mid' : 'conf-low';
+    const sym    = s.symbol.replace(':USDT','');
+    const ts     = fmtTime(s.ts);
+    return `
+      <div class="signal-item">
+        <div class="signal-time">${ts}</div>
+        <div class="signal-main">
+          <div class="signal-pair">
+            ${sym}
+            <span class="tag ${dir}" style="margin-left:4px">${s.side === 'buy' ? 'L' : 'S'}</span>
+            <span class="tag ${mkt}" style="margin-left:3px">${s.market}</span>
+          </div>
+          <div class="signal-meta">${s.strategy} · entry ${s.entry.toLocaleString()}</div>
+        </div>
+        <div class="signal-right">
+          <div class="signal-conf ${confCls}">${conf}%</div>
+          <div class="signal-status ${s.executed ? 'executed' : ''}">${s.executed ? '✓ eseguito' : '— skip'}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderLogs(logs) {
+  // Merge nuovi log
+  const existingTs = new Set(allLogs.map(l => l.ts + l.msg));
+  const newLogs = logs.filter(l => !existingTs.has(l.ts + l.msg));
+  allLogs = [...allLogs, ...newLogs].slice(-200);
+
+  const container = document.getElementById('logContainer');
+  const autoScroll = document.getElementById('autoScroll').checked;
+  const filtered = logFilter === 'ALL'
+    ? allLogs
+    : allLogs.filter(l => l.level === logFilter);
+
+  const html = [...filtered].reverse().map((l, i) => {
+    const ts  = fmtTime(l.ts);
+    const cls = newLogs.some(n => n.ts === l.ts && n.msg === l.msg) ? ' new' : '';
+    return `<div class="log-line${cls}">
+      <span class="log-ts">${ts}</span>
+      <span class="log-lvl ${l.level}">${l.level}</span>
+      <span class="log-msg">${escHtml(l.msg)}</span>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = html || '<div style="color:var(--text3);padding:8px 0">Nessun log</div>';
+  if (autoScroll) container.scrollTop = 0;
+}
+
+function renderMeta(state) {
+  const modeBadge = document.getElementById('modeBadge');
+  modeBadge.textContent = (state.mode || 'paper').toUpperCase();
+  modeBadge.className   = 'mode-badge ' + (state.mode === 'live' ? 'live' : 'paper');
+
+  if (state.last_update) {
+    set('lastUpdate', fmtTime(state.last_update));
+  }
+}
+
+// ── Log filter ───────────────────────────────────────────
+function setFilter(btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  logFilter = btn.dataset.lvl;
+  renderLogs(allLogs);
+}
+
+// ── Helpers ──────────────────────────────────────────────
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(val)) {
+    el.textContent = val;
+    el.classList.remove('updated');
+    void el.offsetWidth;
+    el.classList.add('updated');
+  }
+}
+
+function fmt(n) {
+  if (n == null) return '—';
+  return n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT';
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return iso; }
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Fallback REST poll ────────────────────────────────────
+// (nel caso WebSocket non sia disponibile)
+async function pollREST() {
+  try {
+    const r = await fetch('/api/state');
+    if (r.ok) render(await r.json());
+  } catch(e) {}
+}
+
+// ── Init ─────────────────────────────────────────────────
+connect();
+
+// Fallback poll ogni 5s se WS è giù
+setInterval(() => {
+  if (!wsConn || wsConn.readyState !== WebSocket.OPEN) pollREST();
+}, 5000);
+
+// Poll iniziale immediato
+pollREST();
+</script>
+</body>
+</html>
