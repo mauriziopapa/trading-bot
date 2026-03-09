@@ -55,7 +55,7 @@ class BitgetExchange:
         if "spot" in settings.MARKET_TYPES:
             self._spot_markets = self._retry(self.spot.load_markets)
             logger.info(f"Spot: {len(self._spot_markets)} mercati caricati")
-
+            logger.info(f"Spot: {self._spot_markets} mercati caricati")
         if "futures" in settings.MARKET_TYPES:
             self._futures_markets = self._retry(self.futures.load_markets)
             logger.info(f"Futures: {len(self._futures_markets)} mercati caricati")
