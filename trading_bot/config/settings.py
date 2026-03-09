@@ -42,7 +42,7 @@ BITGET_API_PASSPHRASE   = os.getenv("BITGET_API_PASSPHRASE", "Tommaso14072024")
 
 # ─── Mode ────────────────────────────────────────────────────────────────────
 TRADING_MODE        = os.getenv("TRADING_MODE", "paper")       # paper | live
-IS_LIVE             = TRADING_MODE == "live"
+IS_LIVE             = TRADING_MODE == "paper"
 MARKET_TYPES        = _list("MARKET_TYPES", "spot,futures")     # spot | futures | both
 
 # ─── Symbols ─────────────────────────────────────────────────────────────────
