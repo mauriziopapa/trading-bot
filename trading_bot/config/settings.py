@@ -1,21 +1,11 @@
 """
-settings.py — Configurazione centralizzata.
+settings.py — Tutti i parametri runtime vengono SOLO dal DB (tabella bot_config).
+Zero valori hardcoded nel codice. Zero file su disco.
 
-Fonte di verita' per i campi runtime:
-  PostgreSQL tabella bot_config  (SEMPRE, persistente tra restart)
+Se un parametro non e' in bot_config il bot lancia un errore esplicito
+invece di usare un default nascosto.
 
-Fallback solo se DB non raggiungibile:
-  env vars Railway -> default hardcoded
-
-Campi fissi (API keys, symbols, mode):
-  sempre da env vars Railway.
-
-DESIGN:
-  - Nessun file su disco (Railway filesystem e' efimero)
-  - Nessun _mem che puo' nascondere i valori DB
-  - Al riavvio il bot legge dal DB e trova i valori salvati dalla dashboard
-  - set_many() scrive su DB E aggiorna la cache locale
-  - La cache locale dura DB_CACHE_TTL secondi, poi rilegge dal DB
+Campi fissi (API keys, symbols, mode): sempre da env vars Railway.
 """
 
 from __future__ import annotations
@@ -31,7 +21,52 @@ load_dotenv()
 
 log = logging.getLogger("settings")
 
-# ── Schema tabella ────────────────────────────────────────────────────────────
+# ── Tipo atteso per ogni campo (usato solo per il cast, non come default) ──────
+_FIELD_TYPES: dict[str, type] = {
+    "MAX_RISK_PCT":          float,
+    "DEFAULT_LEVERAGE":      int,
+    "MAX_DAILY_LOSS_PCT":    float,
+    "MAX_DRAWDOWN_PCT":      float,
+    "TAKE_PROFIT_RATIO":     float,
+    "TRAILING_STOP_PCT":     float,
+    "MIN_CONFIDENCE":        float,
+    "MAX_POSITIONS_SPOT":    int,
+    "MAX_POSITIONS_FUTURES": int,
+    "MARGIN_MODE":           str,
+    "ENABLE_RSI_MACD":       bool,
+    "ENABLE_BOLLINGER":      bool,
+    "ENABLE_BREAKOUT":       bool,
+    "ENABLE_SCALPING":       bool,
+    "ENABLE_EMERGING":       bool,
+}
+_RUNTIME_FIELDS = set(_FIELD_TYPES.keys())
+
+
+# ── Cast ──────────────────────────────────────────────────────────────────────
+
+def _cast(key: str, raw: Any) -> Any:
+    t = _FIELD_TYPES.get(key)
+    if t is None or raw is None:
+        return raw
+    try:
+        if t is bool:
+            if isinstance(raw, bool): return raw
+            if isinstance(raw, str):  return raw.lower() in ("true", "1", "yes")
+            return bool(raw)
+        if t is int:
+            if isinstance(raw, bool): return int(raw)
+            return int(float(str(raw)))
+        if t is float:
+            return float(str(raw))
+        if t is str:
+            return str(raw)
+    except (ValueError, TypeError):
+        pass
+    return raw
+
+
+# ── DB ────────────────────────────────────────────────────────────────────────
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS bot_config (
     key        VARCHAR(64) PRIMARY KEY,
@@ -51,82 +86,31 @@ BEGIN
 END $$;
 """
 
-# ── Campi configurabili dalla dashboard ──────────────────────────────────────
-_DEFAULTS: dict[str, Any] = {
-    "MAX_RISK_PCT":          3.5,
-    "DEFAULT_LEVERAGE":      5,
-    "MAX_DAILY_LOSS_PCT":    8.0,
-    "MAX_DRAWDOWN_PCT":      15.0,
-    "TAKE_PROFIT_RATIO":     2.5,
-    "TRAILING_STOP_PCT":     1.2,
-    "MIN_CONFIDENCE":        65.0,
-    "MAX_POSITIONS_SPOT":    4,
-    "MAX_POSITIONS_FUTURES": 3,
-    "MARGIN_MODE":           "isolated",
-    "ENABLE_RSI_MACD":       True,
-    "ENABLE_BOLLINGER":      True,
-    "ENABLE_BREAKOUT":       True,
-    "ENABLE_SCALPING":       True,
-    "ENABLE_EMERGING":       True,
-}
-_RUNTIME_FIELDS = set(_DEFAULTS.keys())
 
-
-# ── DB helpers (modulo-level, usati dal singleton) ────────────────────────────
-
-def _get_engine():
-    """Crea un engine SQLAlchemy monouso. Ritorna None se DATABASE_URL mancante."""
+def _make_engine():
     url = os.getenv("DATABASE_URL", "")
     if not url:
+        log.error("[settings] DATABASE_URL non impostata!")
         return None
     try:
         from sqlalchemy import create_engine
+        ssl = "sslmode=require" not in url  # evita duplicati
         kwargs: dict = {"pool_pre_ping": True}
-        if "railway" in url or "postgres" in url:
+        if ssl and ("railway" in url or "amazonaws" in url or "supabase" in url):
             kwargs["connect_args"] = {"sslmode": "require", "connect_timeout": 5}
-        else:
-            kwargs["connect_args"] = {"connect_timeout": 5}
         return create_engine(url, **kwargs)
     except Exception as e:
-        log.warning(f"[settings] engine creation failed: {e}")
+        log.error(f"[settings] create_engine fallito: {e}")
         return None
 
 
-def _cast(key: str, raw: Any) -> Any:
-    """Converte raw al tipo corretto basandosi sul default."""
-    if raw is None:
-        return _DEFAULTS.get(key)
-    default = _DEFAULTS.get(key)
-    if default is None:
-        return raw
-    try:
-        if isinstance(default, bool):
-            if isinstance(raw, bool):
-                return raw
-            if isinstance(raw, str):
-                return raw.lower() in ("true", "1", "yes")
-            return bool(raw)
-        if isinstance(default, int):
-            if isinstance(raw, bool):
-                return int(raw)
-            return int(float(str(raw)))
-        if isinstance(default, float):
-            return float(str(raw))
-        if isinstance(default, str):
-            return str(raw)
-    except (ValueError, TypeError):
-        pass
-    return raw
-
-
-def _db_load_all(engine) -> dict[str, Any]:
+def _db_load(engine) -> dict[str, Any] | None:
     """
-    Legge TUTTA la tabella bot_config e ritorna dict castato.
-    Crea la tabella se non esiste.
-    Ritorna {} se fallisce.
+    Legge TUTTI i campi da bot_config.
+    Ritorna dict castato, o None se errore DB.
     """
     if engine is None:
-        return {}
+        return None
     try:
         from sqlalchemy import text
         with engine.connect() as conn:
@@ -139,21 +123,16 @@ def _db_load_all(engine) -> dict[str, Any]:
         result = {}
         for key, val_json in rows:
             try:
-                raw = json.loads(val_json)
-                result[key] = _cast(key, raw)
-            except Exception:
-                pass
+                result[key] = _cast(key, json.loads(val_json))
+            except Exception as e:
+                log.warning(f"[settings] cast error {key}={val_json!r}: {e}")
         return result
     except Exception as e:
-        log.warning(f"[settings] db_load_all failed: {e}")
-        return {}
+        log.error(f"[settings] db_load fallito: {e}")
+        return None
 
 
-def _db_save_all(engine, data: dict[str, Any]) -> bool:
-    """
-    Salva/aggiorna tutti i campi in bot_config con UPSERT.
-    Ritorna True se ok.
-    """
+def _db_save(engine, data: dict[str, Any]) -> bool:
     if engine is None or not data:
         return False
     try:
@@ -174,12 +153,11 @@ def _db_save_all(engine, data: dict[str, Any]) -> bool:
             conn.commit()
         return True
     except Exception as e:
-        log.warning(f"[settings] db_save_all failed: {e}")
+        log.error(f"[settings] db_save fallito: {e}")
         return False
 
 
-def _db_delete_all(engine) -> bool:
-    """Svuota bot_config (reset ai default)."""
+def _db_delete(engine) -> bool:
     if engine is None:
         return False
     try:
@@ -189,7 +167,7 @@ def _db_delete_all(engine) -> bool:
             conn.commit()
         return True
     except Exception as e:
-        log.warning(f"[settings] db_delete_all failed: {e}")
+        log.error(f"[settings] db_delete fallito: {e}")
         return False
 
 
@@ -197,118 +175,75 @@ def _db_delete_all(engine) -> bool:
 
 class DynamicSettings:
     """
-    Tutti i campi runtime vengono SEMPRE dal DB (bot_config).
-    La cache locale si rinnova ogni DB_CACHE_TTL secondi.
-    Non esiste piu' _mem che puo' nascondere i valori DB.
+    Legge SEMPRE dal DB. Nessun default nel codice.
+    Cache locale rinnovata ogni CACHE_TTL secondi.
     """
-
-    DB_CACHE_TTL = 8.0   # secondi tra reload da DB
+    CACHE_TTL = 8.0
 
     def __init__(self):
-        self._cache: dict[str, Any] = {}   # cache dei valori DB castati
-        self._cache_ts: float = 0.0         # timestamp ultimo reload
-        self._engine = None                 # engine SQLAlchemy (lazy init)
-        self._db_ok: bool | None = None     # None=non testato
+        self._engine = None
+        self._cache: dict[str, Any] = {}
+        self._cache_ts: float = 0.0
+        self._db_ok: bool | None = None
 
-    # ── engine lazy init ──────────────────────────────────────────────────────
-
-    def _get_engine(self):
+    def _eng(self):
         if self._engine is None:
-            self._engine = _get_engine()
+            self._engine = _make_engine()
         return self._engine
 
-    # ── cache refresh ─────────────────────────────────────────────────────────
-
     def _refresh(self, force: bool = False):
-        """Ricarica dal DB se il TTL e' scaduto o force=True."""
         now = time.monotonic()
-        if not force and (now - self._cache_ts) < self.DB_CACHE_TTL:
+        if not force and (now - self._cache_ts) < self.CACHE_TTL:
             return
-        engine = self._get_engine()
-        data = _db_load_all(engine)
-        if engine is not None:
-            self._db_ok = True if data is not None else False
-        # Aggiorna la cache con i valori dal DB
-        # Per le chiavi non nel DB, usa default/env
-        self._cache = data   # solo le chiavi presenti nel DB
-        self._cache_ts = now
-
-    # ── lettura ───────────────────────────────────────────────────────────────
-
-    def _get_runtime(self, key: str) -> Any:
-        """
-        Legge un campo runtime.
-        Ordine: DB cache -> env var -> default hardcoded.
-        """
-        self._refresh()
-        if key in self._cache:
-            return self._cache[key]   # gia' castato da _db_load_all
-        # env var (utile per override temporaneo senza dashboard)
-        env = os.getenv(key)
-        if env is not None:
-            return _cast(key, env)
-        return _defaults_get(key)
+        data = _db_load(self._eng())
+        if data is not None:
+            self._cache = data
+            self._db_ok = True
+        else:
+            self._db_ok = False
+            # Non toccare _cache: meglio dati vecchi che crash
+        self._cache_ts = time.monotonic()
 
     def __getattr__(self, key: str) -> Any:
         if key.startswith("_"):
             raise AttributeError(key)
         if key in _RUNTIME_FIELDS:
-            return self._get_runtime(key)
+            self._refresh()
+            if key in self._cache:
+                return self._cache[key]
+            raise AttributeError(
+                f"[settings] '{key}' non trovato in bot_config. "
+                f"Esegui init_bot_config.sql sul DB PostgreSQL."
+            )
         raise AttributeError(f"settings has no attribute '{key}'")
 
-    # ── scrittura ─────────────────────────────────────────────────────────────
-
     def set_many(self, updates: dict[str, Any]) -> list[str]:
-        """
-        Salva i nuovi valori sul DB e aggiorna la cache locale.
-        Ritorna lista dei campi cambiati (per il log).
-        Funziona sia stesso processo che processo separato:
-          - stesso processo: cache aggiornata subito, __getattr__ vede i nuovi valori
-          - processo separato: il bot rilegge dal DB entro DB_CACHE_TTL secondi
-        """
-        # Forza reload cache prima per avere i valori attuali
         self._refresh(force=True)
-
         to_save: dict[str, Any] = {}
         changed: list[str] = []
-
         for key, value in updates.items():
             if key not in _RUNTIME_FIELDS:
                 continue
             new_val = _cast(key, value)
-            old_val = self._cache.get(key, _DEFAULTS.get(key))
+            old_val = self._cache.get(key)
             to_save[key] = new_val
             if old_val != new_val:
                 changed.append(f"{key}: {old_val} -> {new_val}")
-
         if to_save:
-            engine = self._get_engine()
-            ok = _db_save_all(engine, to_save)
+            ok = _db_save(self._eng(), to_save)
+            # Aggiorna cache subito indipendentemente dall'esito del DB
+            self._cache.update(to_save)
+            self._cache_ts = time.monotonic()
             if ok:
-                # Aggiorna cache locale subito (non aspettare TTL)
-                self._cache.update(to_save)
-                self._cache_ts = time.monotonic()
                 self._db_ok = True
-                log.info(f"[settings] salvato su DB: {list(to_save.keys())}")
             else:
-                self._db_ok = False
-                log.warning("[settings] DB non raggiungibile — valori solo in-cache locale")
-                # Aggiorna cache locale comunque (dura fino al prossimo restart)
-                self._cache.update(to_save)
-                self._cache_ts = time.monotonic()
-
+                log.error("[settings] set_many: DB non raggiungibile, valori solo in cache locale")
         return changed
 
     def reset_runtime(self):
-        """
-        Cancella tutti i valori da bot_config.
-        Dopo il reset: DB vuoto -> si usano env vars / default.
-        """
-        engine = self._get_engine()
-        _db_delete_all(engine)
+        _db_delete(self._eng())
         self._cache.clear()
         self._cache_ts = 0.0
-        log.info("[settings] reset_runtime: bot_config svuotata")
 
     def get_current(self, key: str) -> Any:
         try:
@@ -317,27 +252,16 @@ class DynamicSettings:
             return None
 
     def as_dict(self) -> dict:
-        """Snapshot di tutti i campi runtime (dal DB + default per i mancanti)."""
         self._refresh()
-        result = {}
-        for key in _RUNTIME_FIELDS:
-            val = self._cache.get(key)
-            if val is None:
-                env = os.getenv(key)
-                val = _cast(key, env) if env is not None else _DEFAULTS.get(key)
-            result[key] = val
-        return result
+        return dict(self._cache)
 
     def storage_backend(self) -> str:
-        if self._db_ok is True:
-            return "postgresql"
-        if self._db_ok is False:
-            return "memory_only"
-        # Non ancora testato
+        if self._db_ok is True:  return "postgresql"
+        if self._db_ok is False: return "memory_only"
         self._refresh(force=True)
         return "postgresql" if self._db_ok else "memory_only"
 
-    # ── campi fissi (sempre da env Railway) ───────────────────────────────────
+    # ── campi fissi — sempre da env Railway ───────────────────────────────────
 
     @property
     def BITGET_API_KEY(self)        -> str:  return os.getenv("BITGET_API_KEY", "")
@@ -345,7 +269,6 @@ class DynamicSettings:
     def BITGET_API_SECRET(self)     -> str:  return os.getenv("BITGET_API_SECRET", "")
     @property
     def BITGET_API_PASSPHRASE(self) -> str:  return os.getenv("BITGET_API_PASSPHRASE", "")
-
     @property
     def TRADING_MODE(self)  -> str:  return os.getenv("TRADING_MODE", "paper")
     @property
@@ -390,9 +313,4 @@ class DynamicSettings:
         except: return 8080
 
 
-def _defaults_get(key: str) -> Any:
-    return _DEFAULTS.get(key)
-
-
-# ── Singleton globale ─────────────────────────────────────────────────────────
 settings = DynamicSettings()
