@@ -22,8 +22,8 @@ class BitgetExchange:
     def __init__(self):
         common_config = {
             "apiKey":    settings.BITGET_API_KEY,
-            "secret":    settings.BITGET_API_SECRET,
-            "password":  settings.BITGET_API_PASSPHRASE,   # obbligatorio su Bitget
+            "secret":    settings.BITGET_SECRET,
+            "password":  settings.BITGET_PASSPHRASE,   # obbligatorio su Bitget
             "enableRateLimit": True,
             "rateLimit": 200,                           # ms tra richieste
         }
@@ -55,7 +55,7 @@ class BitgetExchange:
         if "spot" in settings.MARKET_TYPES:
             self._spot_markets = self._retry(self.spot.load_markets)
             logger.info(f"Spot: {len(self._spot_markets)} mercati caricati")
-            logger.info(f"Spot: {self._spot_markets} mercati caricati")
+
         if "futures" in settings.MARKET_TYPES:
             self._futures_markets = self._retry(self.futures.load_markets)
             logger.info(f"Futures: {len(self._futures_markets)} mercati caricati")
