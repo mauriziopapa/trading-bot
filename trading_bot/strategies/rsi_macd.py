@@ -11,10 +11,10 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from strategies.base import BaseStrategy, Signal
-from utils import indicators as ind
-from utils.risk_manager import RiskManager
-from config import settings
+from trading_bot.strategies.base import BaseStrategy, Signal
+from trading_bot.utils import indicators as ind
+from trading_bot.utils.risk_manager import RiskManager
+from trading_bot.config import settings
 
 
 class RSIMACDStrategy(BaseStrategy):
