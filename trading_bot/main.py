@@ -327,9 +327,20 @@ class TradingBot:
             market    = signal.market,
         )
 
+        # Size = 0.0 → risk_manager ha trovato notionale troppo basso
+        if size <= 0:
+            return
+
         min_size = self.exchange.get_min_order_size(signal.symbol, signal.market)
         if size < min_size:
-            logger.warning(f"Size {size:.6f} < min {min_size} per {signal.symbol}")
+            logger.info(f"[SKIP-MINSIZE] {signal.symbol} {signal.market} size={size:.6f} < min={min_size}")
+            return
+
+        # Verifica notionale minimo (evita "amount must be greater than minimum amount precision")
+        notional = size * signal.entry
+        min_notional = self.exchange.get_min_notional(signal.symbol, signal.market)
+        if notional < min_notional:
+            logger.info(f"[SKIP-NOTIONAL] {signal.symbol} {signal.market} notionale={notional:.2f} < min={min_notional:.2f} USDT")
             return
 
         logger.info(
