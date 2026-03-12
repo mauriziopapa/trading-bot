@@ -39,7 +39,6 @@
   html { font-size: 14px; }
   body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5; }
 
-  /* ── Layout ── */
   .app { display: flex; flex-direction: column; min-height: 100vh; }
 
   header {
@@ -61,7 +60,6 @@
 
   main { flex: 1; padding: 24px 28px; max-width: 1440px; margin: 0 auto; width: 100%; }
 
-  /* ── Grids ── */
   .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 20px; }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
@@ -69,13 +67,11 @@
   @media(max-width:900px) { .grid-2,.grid-3{grid-template-columns:1fr} }
   @media(max-width:600px) { .grid-4{grid-template-columns:1fr 1fr} main{padding:16px} }
 
-  /* ── Cards ── */
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
   .card-header { padding: 14px 16px 0; display: flex; align-items: center; justify-content: space-between; }
   .card-title { font-size: 11px; font-weight: 500; letter-spacing: .6px; text-transform: uppercase; color: var(--text3); }
   .card-body { padding: 8px 16px 16px; }
 
-  /* ── KPI ── */
   .kpi .card-body { padding: 12px 16px 16px; }
   .kpi-value { font-size: 26px; font-weight: 600; letter-spacing: -1px; line-height: 1; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
   .kpi-sub { font-size: 11px; color: var(--text3); font-family: var(--mono); }
@@ -84,13 +80,11 @@
   .down { background: var(--red-bg);    color: var(--red); }
   .flat { background: var(--border2);   color: var(--text2); }
 
-  /* ── Stats bar ── */
   .stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 1px; background: var(--border); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
   .stat-cell { background: var(--surface); padding: 14px 16px; text-align: center; }
   .stat-val { font-size: 20px; font-weight: 600; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
   .stat-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
 
-  /* ── Table ── */
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; color: var(--text3); border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -102,14 +96,12 @@
   .pnl-pos { color: var(--green); font-weight: 500; font-family: var(--mono); }
   .pnl-neg { color: var(--red);   font-weight: 500; font-family: var(--mono); }
 
-  /* ── Tags ── */
   .tag { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 500; letter-spacing: .3px; }
   .tag-buy     { background: var(--green-bg);  color: var(--green); }
   .tag-sell    { background: var(--red-bg);    color: var(--red); }
   .tag-spot    { background: var(--blue-bg);   color: var(--blue); }
   .tag-futures { background: var(--purple-bg); color: var(--purple); }
 
-  /* ── Signals ── */
   .signals-list { display: flex; flex-direction: column; gap: 1px; }
   .signal-item { padding: 10px 16px; display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; border-bottom: 1px solid var(--border2); }
   .signal-item:last-child { border-bottom: none; }
@@ -126,7 +118,6 @@
   .signal-status { font-size: 10px; margin-top: 2px; color: var(--text3); }
   .signal-status.executed { color: var(--green); }
 
-  /* ── Logs ── */
   .log-container { background: var(--bg); border-radius: 6px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; overflow-y: auto; max-height: 300px; padding: 12px; }
   .log-line { display: flex; gap: 10px; align-items: baseline; padding: 2px 0; }
   .log-line:hover { background: rgba(0,0,0,.025); border-radius: 3px; }
@@ -144,83 +135,45 @@
   .filter-btn:hover { border-color: var(--text3); }
   .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-  /* ── Misc ── */
   .updated { animation: flash .4s ease; }
   @keyframes flash { 0%{background:#E8F5FF} 100%{background:transparent} }
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-  /* ════════════════════════════════════════════════════════
-     SENTIMENT BOX
-  ════════════════════════════════════════════════════════ */
-  .sentiment-score-wrap {
-    display: flex; align-items: center; gap: 16px;
-    padding: 14px 16px 10px;
-  }
-  .sentiment-gauge {
-    position: relative; width: 72px; height: 72px; flex-shrink: 0;
-  }
+  /* SENTIMENT */
+  .sentiment-score-wrap { display: flex; align-items: center; gap: 16px; padding: 14px 16px 10px; }
+  .sentiment-gauge { position: relative; width: 72px; height: 72px; flex-shrink: 0; }
   .sentiment-gauge svg { width: 72px; height: 72px; transform: rotate(-90deg); }
   .gauge-bg  { fill: none; stroke: var(--border); stroke-width: 7; }
   .gauge-arc { fill: none; stroke-width: 7; stroke-linecap: round; transition: stroke-dashoffset .6s ease, stroke .4s; }
-  .gauge-label {
-    position: absolute; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    font-family: var(--mono); line-height: 1;
-  }
+  .gauge-label { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: var(--mono); line-height: 1; }
   .gauge-num  { font-size: 18px; font-weight: 600; }
   .gauge-text { font-size: 8px; color: var(--text3); margin-top: 1px; text-transform: uppercase; letter-spacing: .4px; }
-
   .sentiment-info { flex: 1; min-width: 0; }
   .sentiment-label { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
   .sentiment-bias  { font-size: 11px; color: var(--text2); margin-bottom: 8px; }
-
   .sentiment-signals { display: flex; flex-direction: column; gap: 1px; }
-  .sent-row {
-    display: grid; grid-template-columns: 1fr auto auto;
-    gap: 8px; align-items: center;
-    padding: 8px 16px; border-bottom: 1px solid var(--border2);
-    font-size: 12px;
-  }
+  .sent-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border2); font-size: 12px; }
   .sent-row:last-child { border-bottom: none; }
   .sent-source { color: var(--text2); font-weight: 500; }
   .sent-val    { font-family: var(--mono); font-size: 11px; color: var(--text); }
-  .sent-badge  {
-    font-size: 9px; font-weight: 600; letter-spacing: .4px;
-    padding: 2px 7px; border-radius: 10px; text-transform: uppercase;
-  }
+  .sent-badge  { font-size: 9px; font-weight: 600; letter-spacing: .4px; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; }
   .badge-ok  { background: var(--green-bg); color: var(--green); }
   .badge-ko  { background: var(--red-bg);   color: var(--red); }
   .badge-war { background: var(--yellow-bg);color: var(--yellow); }
   .badge-neu { background: var(--border2);  color: var(--text2); }
-
   .sent-threshold { font-size: 10px; color: var(--text3); font-family: var(--mono); }
-
-  /* Bias pill sotto il gauge */
-  .bias-pill {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 10px; border-radius: 20px;
-    font-size: 11px; font-weight: 600; letter-spacing: .3px;
-  }
+  .bias-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: .3px; }
   .bias-bull { background: var(--green-bg); color: var(--green); }
   .bias-bear { background: var(--red-bg);   color: var(--red); }
   .bias-neut { background: var(--border2);  color: var(--text2); }
 
-  /* ════════════════════════════════════════════════════════
-     EMERGING COINS BOX
-  ════════════════════════════════════════════════════════ */
+  /* EMERGING */
   .emerging-list { display: flex; flex-direction: column; }
-  .em-row {
-    display: grid;
-    grid-template-columns: 36px 1fr 70px 60px 56px;
-    gap: 8px; align-items: center;
-    padding: 9px 16px; border-bottom: 1px solid var(--border2);
-    transition: background .1s;
-  }
+  .em-row { display: grid; grid-template-columns: 36px 1fr 70px 60px 56px; gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border2); transition: background .1s; }
   .em-row:last-child { border-bottom: none; }
   .em-row:hover { background: var(--bg); }
-
   .em-rank { font-family: var(--mono); font-size: 11px; color: var(--text3); text-align: center; }
   .em-sym  { font-weight: 600; font-size: 13px; }
   .em-name { font-size: 10px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -229,209 +182,93 @@
   .em-chg.pos { color: var(--green); }
   .em-chg.neg { color: var(--red); }
   .em-score-wrap { text-align: right; }
-  .em-score-bar {
-    height: 4px; border-radius: 2px; background: var(--border2);
-    overflow: hidden; margin-bottom: 3px;
-  }
+  .em-score-bar { height: 4px; border-radius: 2px; background: var(--border2); overflow: hidden; margin-bottom: 3px; }
   .em-score-fill { height: 100%; border-radius: 2px; background: var(--purple); transition: width .5s ease; }
   .em-score-num  { font-family: var(--mono); font-size: 10px; color: var(--text3); }
-
-  .em-header {
-    display: grid;
-    grid-template-columns: 36px 1fr 70px 60px 56px;
-    gap: 8px; padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    font-size: 10px; font-weight: 500; text-transform: uppercase;
-    letter-spacing: .5px; color: var(--text3);
-  }
+  .em-header { display: grid; grid-template-columns: 36px 1fr 70px 60px 56px; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: .5px; color: var(--text3); }
   .em-header span:not(:first-child) { text-align: right; }
-
-  .em-source-tag {
-    font-size: 9px; padding: 1px 5px; border-radius: 3px;
-    margin-left: 4px;
-  }
+  .em-source-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
   .src-trending { background: var(--orange-bg); color: var(--orange); }
   .src-gainers  { background: var(--blue-bg);   color: var(--blue); }
 
-  /* ════════════════════════════════════════════════════════
-     CONFIG PANEL
-  ════════════════════════════════════════════════════════ */
+  /* CONFIG PANEL */
   .config-body { padding: 0 16px 16px; }
-
   .config-section { margin-top: 16px; }
-  .config-section-title {
-    font-size: 10px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: .6px; color: var(--text3);
-    margin-bottom: 10px; padding-bottom: 6px;
-    border-bottom: 1px solid var(--border2);
-  }
-
+  .config-section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--text3); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border2); }
   .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .config-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-
   .cfg-field { display: flex; flex-direction: column; gap: 4px; }
-  .cfg-label {
-    font-size: 10px; font-weight: 500; color: var(--text2);
-    display: flex; align-items: center; justify-content: space-between;
-  }
+  .cfg-label { font-size: 10px; font-weight: 500; color: var(--text2); display: flex; align-items: center; justify-content: space-between; }
   .cfg-hint { font-size: 9px; color: var(--text3); font-family: var(--mono); }
-
-  .cfg-input {
-    width: 100%; padding: 7px 10px; border-radius: 5px;
-    border: 1px solid var(--border); background: var(--bg);
-    font-family: var(--mono); font-size: 12px; color: var(--text);
-    transition: border-color .15s;
-    outline: none;
-  }
+  .cfg-input { width: 100%; padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); font-family: var(--mono); font-size: 12px; color: var(--text); transition: border-color .15s; outline: none; }
   .cfg-input:focus { border-color: var(--accent); background: var(--surface); }
   .cfg-input.danger:focus { border-color: var(--red); }
-
-  .cfg-select {
-    width: 100%; padding: 7px 10px; border-radius: 5px;
-    border: 1px solid var(--border); background: var(--bg);
-    font-family: var(--mono); font-size: 12px; color: var(--text);
-    cursor: pointer; outline: none;
-  }
+  .cfg-select { width: 100%; padding: 7px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); font-family: var(--mono); font-size: 12px; color: var(--text); cursor: pointer; outline: none; }
   .cfg-select:focus { border-color: var(--accent); }
 
-  /* Toggle switch */
-  .cfg-toggle-row {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 0; border-bottom: 1px solid var(--border2);
-  }
+  .cfg-toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border2); }
   .cfg-toggle-row:last-child { border-bottom: none; }
   .cfg-toggle-label { font-size: 12px; color: var(--text); }
   .cfg-toggle-desc  { font-size: 10px; color: var(--text3); margin-top: 1px; }
-
-  .toggle {
-    position: relative; width: 36px; height: 20px; flex-shrink: 0;
-  }
+  .toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
   .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-slider {
-    position: absolute; inset: 0; border-radius: 20px;
-    background: var(--border); cursor: pointer;
-    transition: background .2s;
-  }
-  .toggle-slider::before {
-    content: ''; position: absolute;
-    width: 14px; height: 14px; border-radius: 50%;
-    background: white; left: 3px; top: 3px;
-    transition: transform .2s;
-    box-shadow: 0 1px 3px rgba(0,0,0,.2);
-  }
+  .toggle-slider { position: absolute; inset: 0; border-radius: 20px; background: var(--border); cursor: pointer; transition: background .2s; }
+  .toggle-slider::before { content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: white; left: 3px; top: 3px; transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
   .toggle input:checked + .toggle-slider { background: var(--accent); }
   .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
 
-  /* Preset buttons */
   .preset-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-  .preset-btn {
-    padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 600;
-    cursor: pointer; border: 1.5px solid var(--border);
-    background: var(--surface); color: var(--text2);
-    transition: all .15s; letter-spacing: .2px;
-  }
+  .preset-btn { padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1.5px solid var(--border); background: var(--surface); color: var(--text2); transition: all .15s; letter-spacing: .2px; }
   .preset-btn:hover { border-color: var(--text3); color: var(--text); }
   .preset-btn.active-preset { border-color: var(--accent); background: var(--accent); color: white; }
-  .preset-btn.preset-safe   { --hover: var(--green); }
-  .preset-btn.preset-aggr   { --hover: var(--red); }
   .preset-btn.preset-aggr.active-preset { background: var(--red); border-color: var(--red); }
 
-  /* Risk meter */
   .risk-meter { margin: 10px 0 14px; }
-  .risk-meter-track {
-    height: 6px; border-radius: 3px;
-    background: linear-gradient(to right, #18794E, #AD5700, #CE2C31);
-    position: relative;
-  }
-  .risk-meter-thumb {
-    position: absolute; top: -5px;
-    width: 16px; height: 16px; border-radius: 50%;
-    background: white; border: 2px solid var(--accent);
-    transform: translateX(-50%);
-    transition: left .3s ease;
-    box-shadow: 0 1px 4px rgba(0,0,0,.2);
-  }
-  .risk-meter-labels {
-    display: flex; justify-content: space-between;
-    font-size: 9px; color: var(--text3); margin-top: 6px;
-  }
+  .risk-meter-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, #18794E, #AD5700, #CE2C31); position: relative; }
+  .risk-meter-thumb { position: absolute; top: -5px; width: 16px; height: 16px; border-radius: 50%; background: white; border: 2px solid var(--accent); transform: translateX(-50%); transition: left .3s ease; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .risk-meter-labels { display: flex; justify-content: space-between; font-size: 9px; color: var(--text3); margin-top: 6px; }
 
-  /* Apply button */
   .cfg-apply-row { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
-  .cfg-apply-btn {
-    padding: 9px 20px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    cursor: pointer; border: none; background: var(--accent); color: white;
-    transition: opacity .15s; letter-spacing: .2px;
-  }
+  .cfg-apply-btn { padding: 9px 20px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: var(--accent); color: white; transition: opacity .15s; letter-spacing: .2px; }
   .cfg-apply-btn:hover { opacity: .85; }
   .cfg-apply-btn:active { opacity: .7; }
-  .cfg-apply-btn.danger { background: var(--red); }
   .cfg-save-status { font-size: 11px; color: var(--text3); font-family: var(--mono); }
   .cfg-save-status.ok  { color: var(--green); }
   .cfg-save-status.err { color: var(--red); }
 
-  /* Restart button */
-  .cfg-restart-btn {
-    padding: 9px 16px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    cursor: pointer; border: 1.5px solid var(--border);
-    background: var(--surface); color: var(--text2);
-    transition: all .15s; letter-spacing: .2px;
-    display: flex; align-items: center; gap: 6px;
-  }
+  .cfg-restart-btn { padding: 9px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1.5px solid var(--border); background: var(--surface); color: var(--text2); transition: all .15s; letter-spacing: .2px; display: flex; align-items: center; gap: 6px; }
   .cfg-restart-btn:hover  { border-color: var(--red); color: var(--red); background: var(--red-bg); }
-  .cfg-restart-btn:active { opacity: .7; }
   .cfg-restart-btn:disabled { opacity: .4; cursor: not-allowed; }
   .cfg-restart-btn.spinning .restart-icon { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* Confirm modal */
-  .modal-overlay {
-    display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,.35); backdrop-filter: blur(2px);
-    align-items: center; justify-content: center;
-  }
+  .modal-overlay { display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.35); backdrop-filter: blur(2px); align-items: center; justify-content: center; }
   .modal-overlay.open { display: flex; }
-  .modal-box {
-    background: var(--surface); border-radius: 12px;
-    border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,.15);
-    padding: 28px 28px 22px; max-width: 380px; width: 90%;
-    animation: modalIn .18s ease;
-  }
+  .modal-box { background: var(--surface); border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,.15); padding: 28px 28px 22px; max-width: 380px; width: 90%; animation: modalIn .18s ease; }
   @keyframes modalIn { from{transform:scale(.95);opacity:0} to{transform:scale(1);opacity:1} }
   .modal-icon  { font-size: 28px; margin-bottom: 12px; }
   .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
   .modal-body  { font-size: 13px; color: var(--text2); line-height: 1.6; margin-bottom: 20px; }
   .modal-body strong { color: var(--red); }
   .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
-  .modal-cancel {
-    padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 500;
-    cursor: pointer; border: 1px solid var(--border); background: var(--surface);
-    color: var(--text2); transition: all .15s;
-  }
+  .modal-cancel { padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text2); transition: all .15s; }
   .modal-cancel:hover { border-color: var(--text3); color: var(--text); }
-  .modal-confirm {
-    padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 600;
-    cursor: pointer; border: none; background: var(--red); color: white;
-    transition: opacity .15s;
-  }
+  .modal-confirm { padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: var(--red); color: white; transition: opacity .15s; }
   .modal-confirm:hover { opacity: .85; }
 
-  /* Restart countdown banner */
-  .restart-banner {
-    display: none; position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
-    background: var(--accent); color: white; padding: 10px 20px;
-    border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 999;
-    box-shadow: 0 4px 16px rgba(0,0,0,.2); white-space: nowrap;
-    animation: slideDown .2s ease;
-  }
+  .restart-banner { display: none; position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: var(--accent); color: white; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 999; box-shadow: 0 4px 16px rgba(0,0,0,.2); white-space: nowrap; animation: slideDown .2s ease; }
   .restart-banner.visible { display: block; }
   @keyframes slideDown { from{transform:translateX(-50%) translateY(-10px);opacity:0} to{transform:translateX(-50%) translateY(0);opacity:1} }
+
+  /* DB source badge */
+  .db-source-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; font-weight: 600; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .db-source-badge.pg  { background: var(--blue-bg);   color: var(--blue); }
+  .db-source-badge.mem { background: var(--yellow-bg); color: var(--yellow); }
+  .db-source-badge.def { background: var(--red-bg);    color: var(--red); }
 </style>
 </head>
 <body>
 <div class="app">
 
-<!-- ── Header ── -->
 <header>
   <div class="logo">
     <div class="logo-dot" id="statusDot"></div>
@@ -449,7 +286,7 @@
 
 <main>
 
-  <!-- ── KPI ── -->
+  <!-- KPI -->
   <div class="grid-4">
     <div class="card kpi">
       <div class="card-header"><span class="card-title">Saldo Spot</span></div>
@@ -481,7 +318,7 @@
     </div>
   </div>
 
-  <!-- ── Stats ── -->
+  <!-- Stats -->
   <div style="margin-bottom:20px">
     <div class="stats-grid">
       <div class="stat-cell"><div class="stat-val" id="statTrades">—</div><div class="stat-lbl">Trades Totali</div></div>
@@ -491,9 +328,8 @@
     </div>
   </div>
 
-  <!-- ── Positions + Signals ── -->
+  <!-- Positions + Signals -->
   <div class="grid-2">
-
     <div class="card">
       <div class="card-header">
         <span class="card-title">Posizioni Aperte</span>
@@ -510,7 +346,6 @@
         </div>
       </div>
     </div>
-
     <div class="card">
       <div class="card-header">
         <span class="card-title">Segnali Recenti</span>
@@ -520,31 +355,22 @@
         <div class="empty-state">Nessun segnale</div>
       </div>
     </div>
-
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════
-       ROW: SENTIMENT + EMERGING + CONFIG
-  ═══════════════════════════════════════════════════════ -->
+  <!-- Sentiment + Emerging + Config -->
   <div class="grid-3">
 
-    <!-- ── SENTIMENT BOX ── -->
+    <!-- SENTIMENT -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">Sentiment Mercato</span>
         <span id="sentUpdated" style="font-size:10px;color:var(--text3);font-family:var(--mono)">—</span>
       </div>
-
-      <!-- Gauge + label -->
       <div class="sentiment-score-wrap">
         <div class="sentiment-gauge">
           <svg viewBox="0 0 36 36">
             <circle class="gauge-bg"  cx="18" cy="18" r="15.9"/>
-            <circle class="gauge-arc" cx="18" cy="18" r="15.9"
-              id="gaugeArc"
-              stroke-dasharray="100 100"
-              stroke-dashoffset="100"
-              stroke="#18794E"/>
+            <circle class="gauge-arc" cx="18" cy="18" r="15.9" id="gaugeArc" stroke-dasharray="100 100" stroke-dashoffset="100" stroke="#18794E"/>
           </svg>
           <div class="gauge-label">
             <span class="gauge-num" id="gaugeNum">—</span>
@@ -557,40 +383,35 @@
           <span class="bias-pill bias-neut" id="sentBiasPill">—</span>
         </div>
       </div>
-
-      <!-- Dettaglio sorgenti con soglie OK/KO -->
-      <div class="sentiment-signals" id="sentRows">
-        <!-- popolato da JS -->
-      </div>
+      <div class="sentiment-signals" id="sentRows"></div>
     </div>
 
-    <!-- ── EMERGING COINS BOX ── -->
+    <!-- EMERGING -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">Cripto Emergenti</span>
         <span id="emCount" style="font-size:11px;color:var(--text3)">0 coin</span>
       </div>
       <div class="em-header">
-        <span>#</span>
-        <span>Simbolo</span>
-        <span>Vol 24h</span>
-        <span>Chg%</span>
-        <span>Score</span>
+        <span>#</span><span>Simbolo</span><span>Vol 24h</span><span>Chg%</span><span>Score</span>
       </div>
       <div class="emerging-list" id="emergingList">
         <div class="empty-state">In attesa dei dati...</div>
       </div>
     </div>
 
-    <!-- ── CONFIG PANEL ── -->
+    <!-- CONFIG PANEL -->
     <div class="card">
       <div class="card-header">
         <span class="card-title">Configurazione Trading</span>
-        <span id="cfgPresetLabel" style="font-size:10px;color:var(--text3)">personalizzata</span>
+        <span id="cfgPresetLabel" style="font-size:10px;color:var(--text3)">
+          personalizzata
+          <!-- FIX: badge sorgente DB -->
+          <span class="db-source-badge def" id="cfgSourceBadge" style="margin-left:6px">default</span>
+        </span>
       </div>
       <div class="config-body">
 
-        <!-- Preset buttons -->
         <div style="margin-top:12px">
           <div style="font-size:10px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Preset rapido</div>
           <div class="preset-row">
@@ -600,68 +421,45 @@
           </div>
         </div>
 
-        <!-- Risk meter -->
         <div class="risk-meter">
           <div class="risk-meter-track">
             <div class="risk-meter-thumb" id="riskThumb" style="left:50%"></div>
           </div>
           <div class="risk-meter-labels">
-            <span>Conservativo</span>
-            <span>Bilanciato</span>
-            <span>Aggressivo</span>
+            <span>Conservativo</span><span>Bilanciato</span><span>Aggressivo</span>
           </div>
         </div>
 
-        <!-- Risk Management -->
         <div class="config-section">
           <div class="config-section-title">Risk Management</div>
           <div class="config-grid">
             <div class="cfg-field">
-              <label class="cfg-label">
-                Rischio per trade
-                <span class="cfg-hint" id="hintRisk">3.5%</span>
-              </label>
+              <label class="cfg-label">Rischio per trade <span class="cfg-hint" id="hintRisk">3.5%</span></label>
               <input class="cfg-input" id="cfgRisk" type="number" min="0.5" max="10" step="0.5" value="3.5" oninput="onCfgChange()">
             </div>
             <div class="cfg-field">
-              <label class="cfg-label">
-                Leverage
-                <span class="cfg-hint" id="hintLev">5x</span>
-              </label>
+              <label class="cfg-label">Leverage <span class="cfg-hint" id="hintLev">5x</span></label>
               <input class="cfg-input" id="cfgLeverage" type="number" min="1" max="20" step="1" value="5" oninput="onCfgChange()">
             </div>
             <div class="cfg-field">
-              <label class="cfg-label">
-                Max loss giornaliero
-                <span class="cfg-hint" id="hintDailyLoss">8%</span>
-              </label>
+              <label class="cfg-label">Max loss giornaliero <span class="cfg-hint" id="hintDailyLoss">8%</span></label>
               <input class="cfg-input danger" id="cfgDailyLoss" type="number" min="2" max="30" step="1" value="8" oninput="onCfgChange()">
             </div>
             <div class="cfg-field">
-              <label class="cfg-label">
-                Max drawdown
-                <span class="cfg-hint" id="hintDrawdown">15%</span>
-              </label>
+              <label class="cfg-label">Max drawdown <span class="cfg-hint" id="hintDrawdown">15%</span></label>
               <input class="cfg-input danger" id="cfgDrawdown" type="number" min="5" max="50" step="1" value="15" oninput="onCfgChange()">
             </div>
             <div class="cfg-field">
-              <label class="cfg-label">
-                TP ratio (×SL)
-                <span class="cfg-hint" id="hintTp">2.5×</span>
-              </label>
+              <label class="cfg-label">TP ratio (×SL) <span class="cfg-hint" id="hintTp">2.5×</span></label>
               <input class="cfg-input" id="cfgTpRatio" type="number" min="1" max="5" step="0.25" value="2.5" oninput="onCfgChange()">
             </div>
             <div class="cfg-field">
-              <label class="cfg-label">
-                Trailing stop %
-                <span class="cfg-hint" id="hintTrail">1.2%</span>
-              </label>
+              <label class="cfg-label">Trailing stop % <span class="cfg-hint" id="hintTrail">1.2%</span></label>
               <input class="cfg-input" id="cfgTrailing" type="number" min="0.3" max="5" step="0.1" value="1.2" oninput="onCfgChange()">
             </div>
           </div>
         </div>
 
-        <!-- Strategie -->
         <div class="config-section">
           <div class="config-section-title">Strategie attive</div>
           <div class="cfg-toggle-row">
@@ -686,7 +484,6 @@
           </div>
         </div>
 
-        <!-- Mercati -->
         <div class="config-section">
           <div class="config-section-title">Mercati & Posizioni</div>
           <div class="config-grid">
@@ -712,7 +509,6 @@
           </div>
         </div>
 
-        <!-- Apply + Restart -->
         <div class="cfg-apply-row">
           <button class="cfg-apply-btn" id="cfgApplyBtn" onclick="applyConfig()">Applica configurazione</button>
           <button class="cfg-restart-btn" id="cfgRestartBtn" onclick="openRestartModal()">
@@ -721,7 +517,6 @@
           <span class="cfg-save-status" id="cfgStatus"></span>
         </div>
 
-        <!-- Reset config link -->
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:10px;color:var(--text3)">Resetta ai valori Railway Variables</span>
           <button id="cfgResetBtn" onclick="resetConfig()" style="font-size:10px;color:var(--red);background:none;border:none;cursor:pointer;padding:2px 8px;border-radius:3px;">Reset default</button>
@@ -748,10 +543,9 @@
     </div>
   </div>
 
-  <!-- RESTART BANNER -->
   <div class="restart-banner" id="restartBanner">&#9203; Bot in riavvio... <span id="restartCountdown">30</span>s</div>
 
-  <!-- ── Log ── -->
+  <!-- Log -->
   <div class="card">
     <div class="card-header" style="padding-bottom:0">
       <span class="card-title">Log Bot</span>
@@ -777,10 +571,11 @@
 // ════════════════════════════════════════════════════════
 // STATE
 // ════════════════════════════════════════════════════════
-let wsConn        = null;
-let logFilter     = 'ALL';
-let allLogs       = [];
+let wsConn         = null;
+let logFilter      = 'ALL';
+let allLogs        = [];
 let reconnectTimer = null;
+let _configLoaded  = false;   // FIX: evita di sovrascrivere dopo che l'utente ha modificato
 
 // ════════════════════════════════════════════════════════
 // WEBSOCKET
@@ -788,7 +583,11 @@ let reconnectTimer = null;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   wsConn = new WebSocket(`${proto}://${location.host}/ws`);
-  wsConn.onopen  = () => { setConnected(true); clearTimeout(reconnectTimer); setInterval(() => { if(wsConn.readyState===1) wsConn.send('ping'); }, 20000); };
+  wsConn.onopen  = () => {
+    setConnected(true);
+    clearTimeout(reconnectTimer);
+    setInterval(() => { if(wsConn.readyState===1) wsConn.send('ping'); }, 20000);
+  };
   wsConn.onmessage = ({data}) => {
     try {
       const m = JSON.parse(data);
@@ -816,6 +615,15 @@ function render(state) {
   renderMeta(state);
   renderSentiment(state.sentiment);
   renderEmerging(state.emerging || []);
+  // ═══════════════════════════════════════════════════
+  // FIX 1: popola i campi config con i valori DAL DB.
+  // Senza questa riga render() non aggiornava mai i campi
+  // del pannello config → mostravano sempre i default HTML
+  // hardcoded (3.5, 5, 8, 15...) invece dei valori reali.
+  // ═══════════════════════════════════════════════════
+  if (state.config && Object.keys(state.config).length > 0) {
+    onConfigUpdated({ config: state.config, changed: [] });
+  }
 }
 
 // ── KPIs ─────────────────────────────────────────────
@@ -925,14 +733,8 @@ function renderMeta(state) {
 }
 
 // ════════════════════════════════════════════════════════
-// SENTIMENT RENDER
+// SENTIMENT
 // ════════════════════════════════════════════════════════
-/*
-  Soglie OK/KO per ogni sorgente:
-  Fear & Greed:  OK 25-75 | WARN 15-25 e 75-85 | KO <15 o >85
-  Funding BTC:   OK -0.02..+0.05 | WARN +0.05..+0.1 | KO >0.1 o <-0.05
-  L/S Ratio BTC: OK 0.7..1.5 | WARN 1.5..2.0 | KO >2 o <0.5
-*/
 function renderSentiment(s) {
   if (!s) {
     document.getElementById('gaugeNum').textContent  = '—';
@@ -941,124 +743,57 @@ function renderSentiment(s) {
     document.getElementById('sentRows').innerHTML = '<div class="empty-state">In attesa del bot...</div>';
     return;
   }
-
-  // Gauge
   const score = s.score || 50;
-  const circumference = 100;
   const arc   = document.getElementById('gaugeArc');
-  arc.setAttribute('stroke-dashoffset', circumference - score);
-  arc.setAttribute('stroke',
-    score < 25 ? '#CE2C31' :
-    score < 45 ? '#AD5700' :
-    score < 55 ? '#006ADC' :
-    score < 75 ? '#AD5700' : '#CE2C31'
-  );
-  document.getElementById('gaugeNum').textContent  = score;
-  document.getElementById('gaugeNum').style.color  =
+  arc.setAttribute('stroke-dashoffset', 100 - score);
+  arc.setAttribute('stroke', score < 25 ? '#CE2C31' : score < 45 ? '#AD5700' : score < 55 ? '#006ADC' : score < 75 ? '#AD5700' : '#CE2C31');
+  document.getElementById('gaugeNum').textContent = score;
+  document.getElementById('gaugeNum').style.color =
     score < 25 ? 'var(--red)' : score > 75 ? 'var(--red)' : score < 45 || score > 55 ? 'var(--yellow)' : 'var(--blue)';
-
-  // Label
   document.getElementById('sentLabel').textContent = s.label || '—';
   document.getElementById('sentUpdated').textContent = fmtTime(new Date().toISOString());
-
-  // Bias pill
   const bias = s.bias || 'neutral';
   const bpill = document.getElementById('sentBiasPill');
-  const biasMap = { bullish: ['bias-bull','🐂 Bullish contrarian'], bearish: ['bias-bear','🐻 Bearish contrarian'], neutral: ['bias-neut','⚖️ Neutro'] };
+  const biasMap = { bullish:['bias-bull','🐂 Bullish contrarian'], bearish:['bias-bear','🐻 Bearish contrarian'], neutral:['bias-neut','⚖️ Neutro'] };
   const [bcls, btxt] = biasMap[bias] || biasMap.neutral;
   bpill.className   = `bias-pill ${bcls}`;
   bpill.textContent = btxt;
   document.getElementById('sentBiasText').textContent =
-    bias === 'bullish' ? 'LONG favoriti (+1.3× conf)' :
-    bias === 'bearish' ? 'SHORT favoriti (+1.3× conf)' : 'Tutte le strategie operative';
-
-  // Rows con soglie
+    bias==='bullish' ? 'LONG favoriti (+1.3× conf)' : bias==='bearish' ? 'SHORT favoriti (+1.3× conf)' : 'Tutte le strategie operative';
   const rows = [
-    {
-      source: 'Fear & Greed',
-      val:    s.fear_greed != null ? `${s.fear_greed} — ${s.fear_greed_label}` : '—',
-      raw:    s.fear_greed,
-      badge:  fgBadge(s.fear_greed),
-      thresh: 'OK: 25–75 | WARN: 15–85 | KO: <15 >85',
-    },
-    {
-      source: 'Funding BTC',
-      val:    s.funding_btc != null ? `${s.funding_btc.toFixed(3)}% / 8h` : '—',
-      raw:    s.funding_btc,
-      badge:  fundingBadge(s.funding_btc),
-      thresh: 'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10',
-    },
-    {
-      source: 'Funding ETH',
-      val:    s.funding_eth != null ? `${s.funding_eth.toFixed(3)}% / 8h` : '—',
-      raw:    s.funding_eth,
-      badge:  fundingBadge(s.funding_eth),
-      thresh: 'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10',
-    },
-    {
-      source: 'L/S Ratio BTC',
-      val:    s.ls_ratio_btc != null ? s.ls_ratio_btc.toFixed(3) : '—',
-      raw:    s.ls_ratio_btc,
-      badge:  lsBadge(s.ls_ratio_btc),
-      thresh: 'OK: 0.7–1.5 | WARN: 1.5–2.0 | KO: >2.0 <0.5',
-    },
+    { source:'Fear & Greed', val: s.fear_greed!=null?`${s.fear_greed} — ${s.fear_greed_label}`:'—', badge: fgBadge(s.fear_greed), thresh:'OK: 25–75 | WARN: 15–85 | KO: <15 >85' },
+    { source:'Funding BTC',  val: s.funding_btc!=null?`${s.funding_btc.toFixed(3)}% / 8h`:'—',   badge: fundingBadge(s.funding_btc), thresh:'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10' },
+    { source:'Funding ETH',  val: s.funding_eth!=null?`${s.funding_eth.toFixed(3)}% / 8h`:'—',   badge: fundingBadge(s.funding_eth), thresh:'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10' },
+    { source:'L/S Ratio BTC',val: s.ls_ratio_btc!=null?s.ls_ratio_btc.toFixed(3):'—',             badge: lsBadge(s.ls_ratio_btc), thresh:'OK: 0.7–1.5 | WARN: 1.5–2.0 | KO: >2.0 <0.5' },
   ];
-
   document.getElementById('sentRows').innerHTML = rows.map(r => `
     <div class="sent-row">
-      <div>
-        <div class="sent-source">${r.source}</div>
-        <div class="sent-threshold">${r.thresh}</div>
-      </div>
+      <div><div class="sent-source">${r.source}</div><div class="sent-threshold">${r.thresh}</div></div>
       <div class="sent-val">${r.val}</div>
       <span class="sent-badge ${r.badge.cls}">${r.badge.txt}</span>
-    </div>
-  `).join('');
+    </div>`).join('');
 }
-
-function fgBadge(v) {
-  if (v == null) return {cls:'badge-neu', txt:'N/D'};
-  if (v < 15 || v > 85) return {cls:'badge-ko',  txt:'KO'};
-  if (v < 25 || v > 75) return {cls:'badge-war', txt:'WARN'};
-  return {cls:'badge-ok', txt:'OK'};
-}
-function fundingBadge(v) {
-  if (v == null) return {cls:'badge-neu', txt:'N/D'};
-  if (v > 0.10 || v < -0.05) return {cls:'badge-ko',  txt:'KO'};
-  if (v > 0.05)               return {cls:'badge-war', txt:'WARN'};
-  return {cls:'badge-ok', txt:'OK'};
-}
-function lsBadge(v) {
-  if (v == null) return {cls:'badge-neu', txt:'N/D'};
-  if (v > 2.0 || v < 0.5) return {cls:'badge-ko',  txt:'KO'};
-  if (v > 1.5)             return {cls:'badge-war', txt:'WARN'};
-  return {cls:'badge-ok', txt:'OK'};
-}
+function fgBadge(v)      { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v<15||v>85) return{cls:'badge-ko',txt:'KO'}; if(v<25||v>75) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
+function fundingBadge(v) { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>0.10||v<-0.05) return{cls:'badge-ko',txt:'KO'}; if(v>0.05) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
+function lsBadge(v)      { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>2.0||v<0.5) return{cls:'badge-ko',txt:'KO'}; if(v>1.5) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
 
 // ════════════════════════════════════════════════════════
-// EMERGING RENDER
+// EMERGING
 // ════════════════════════════════════════════════════════
 function renderEmerging(coins) {
   const el = document.getElementById('emergingList');
   set('emCount', coins.length + ' coin');
   if (!coins.length) { el.innerHTML = '<div class="empty-state">Nessuna coin emergente trovata</div>'; return; }
-
   el.innerHTML = coins.slice(0,8).map((c,i) => {
-    const chgCls = (c.price_change_24h || 0) >= 0 ? 'pos' : 'neg';
-    const chgTxt = (c.price_change_24h || 0) >= 0
-      ? `+${(c.price_change_24h||0).toFixed(1)}%`
-      : `${(c.price_change_24h||0).toFixed(1)}%`;
-    const vol    = fmtVol(c.volume_24h_usd);
+    const chgCls = (c.price_change_24h||0) >= 0 ? 'pos' : 'neg';
+    const chgTxt = (c.price_change_24h||0) >= 0 ? `+${(c.price_change_24h||0).toFixed(1)}%` : `${(c.price_change_24h||0).toFixed(1)}%`;
     const score  = Math.round(c.score || 0);
-    const srcCls = c.source === 'trending' ? 'src-trending' : 'src-gainers';
-    const srcTxt = c.source === 'trending' ? '🔥' : '📈';
+    const srcCls = c.source==='trending' ? 'src-trending' : 'src-gainers';
+    const srcTxt = c.source==='trending' ? '🔥' : '📈';
     return `<div class="em-row">
       <div class="em-rank">${i+1}</div>
-      <div>
-        <div class="em-sym">${c.symbol}<span class="em-source-tag ${srcCls}">${srcTxt}</span></div>
-        <div class="em-name">${c.name || ''}</div>
-      </div>
-      <div class="em-vol">${vol}</div>
+      <div><div class="em-sym">${c.symbol}<span class="em-source-tag ${srcCls}">${srcTxt}</span></div><div class="em-name">${c.name||''}</div></div>
+      <div class="em-vol">${fmtVol(c.volume_24h_usd)}</div>
       <div class="em-chg ${chgCls}">${chgTxt}</div>
       <div class="em-score-wrap">
         <div class="em-score-bar"><div class="em-score-fill" style="width:${score}%"></div></div>
@@ -1067,89 +802,114 @@ function renderEmerging(coins) {
     </div>`;
   }).join('');
 }
-
-function fmtVol(n) {
-  if (!n) return '—';
-  if (n >= 1e9) return (n/1e9).toFixed(1)+'B';
-  if (n >= 1e6) return (n/1e6).toFixed(0)+'M';
-  if (n >= 1e3) return (n/1e3).toFixed(0)+'K';
-  return n.toFixed(0);
-}
+function fmtVol(n) { if(!n) return '—'; if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(0)+'M'; if(n>=1e3) return (n/1e3).toFixed(0)+'K'; return n.toFixed(0); }
 
 // ════════════════════════════════════════════════════════
 // CONFIG PANEL
 // ════════════════════════════════════════════════════════
 const PRESETS = {
-  safe: {
-    risk:3.5, leverage:3, dailyLoss:5, drawdown:10,
-    tpRatio:2.0, trailing:1.5, minConf:70, maxSpot:3, maxFutures:2,
-    rsi:true, boll:true, break:false, scalp:false, emerg:false,
-    label:'Conservativo'
-  },
-  balanced: {
-    risk:3.5, leverage:5, dailyLoss:8, drawdown:15,
-    tpRatio:2.5, trailing:1.2, minConf:65, maxSpot:4, maxFutures:3,
-    rsi:true, boll:true, break:true, scalp:true, emerg:true,
-    label:'Bilanciato'
-  },
-  aggressive: {
-    risk:5.0, leverage:10, dailyLoss:12, drawdown:20,
-    tpRatio:3.0, trailing:0.8, minConf:55, maxSpot:6, maxFutures:5,
-    rsi:true, boll:true, break:true, scalp:true, emerg:true,
-    label:'Aggressivo'
-  }
+  safe:       { risk:3.5, leverage:3,  dailyLoss:5,  drawdown:10, tpRatio:2.0, trailing:1.5, minConf:70, maxSpot:3, maxFutures:2, rsi:true,  boll:true, break:false, scalp:false, emerg:false, label:'Conservativo' },
+  balanced:   { risk:3.5, leverage:5,  dailyLoss:8,  drawdown:15, tpRatio:2.5, trailing:1.2, minConf:65, maxSpot:4, maxFutures:3, rsi:true,  boll:true, break:true,  scalp:true,  emerg:true,  label:'Bilanciato' },
+  aggressive: { risk:5.0, leverage:10, dailyLoss:12, drawdown:20, tpRatio:3.0, trailing:0.8, minConf:55, maxSpot:6, maxFutures:5, rsi:true,  boll:true, break:true,  scalp:true,  emerg:true,  label:'Aggressivo' }
 };
 
 function applyPreset(name) {
   const p = PRESETS[name];
   if (!p) return;
-
-  document.getElementById('cfgRisk').value      = p.risk;
-  document.getElementById('cfgLeverage').value  = p.leverage;
-  document.getElementById('cfgDailyLoss').value = p.dailyLoss;
-  document.getElementById('cfgDrawdown').value  = p.drawdown;
-  document.getElementById('cfgTpRatio').value   = p.tpRatio;
-  document.getElementById('cfgTrailing').value  = p.trailing;
-  document.getElementById('cfgMinConf').value   = p.minConf;
-  document.getElementById('cfgMaxSpot').value   = p.maxSpot;
+  document.getElementById('cfgRisk').value       = p.risk;
+  document.getElementById('cfgLeverage').value   = p.leverage;
+  document.getElementById('cfgDailyLoss').value  = p.dailyLoss;
+  document.getElementById('cfgDrawdown').value   = p.drawdown;
+  document.getElementById('cfgTpRatio').value    = p.tpRatio;
+  document.getElementById('cfgTrailing').value   = p.trailing;
+  document.getElementById('cfgMinConf').value    = p.minConf;
+  document.getElementById('cfgMaxSpot').value    = p.maxSpot;
   document.getElementById('cfgMaxFutures').value = p.maxFutures;
   document.getElementById('togRsiMacd').checked  = p.rsi;
-  document.getElementById('togBollinger').checked = p.boll;
+  document.getElementById('togBollinger').checked= p.boll;
   document.getElementById('togBreakout').checked = p.break;
   document.getElementById('togScalping').checked = p.scalp;
   document.getElementById('togEmerging').checked = p.emerg;
-
-  // Evidenzia preset attivo
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active-preset'));
   event.target.classList.add('active-preset');
   document.getElementById('cfgPresetLabel').textContent = p.label;
-
-  updateHints();
-  updateRiskMeter();
+  updateHints(); updateRiskMeter();
 }
 
 function onCfgChange() {
-  updateHints();
-  updateRiskMeter();
+  updateHints(); updateRiskMeter();
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active-preset'));
   document.getElementById('cfgPresetLabel').textContent = 'personalizzata';
 }
 
 function updateHints() {
-  document.getElementById('hintRisk').textContent    = document.getElementById('cfgRisk').value + '%';
-  document.getElementById('hintLev').textContent     = document.getElementById('cfgLeverage').value + 'x';
-  document.getElementById('hintDailyLoss').textContent = document.getElementById('cfgDailyLoss').value + '%';
+  document.getElementById('hintRisk').textContent     = document.getElementById('cfgRisk').value + '%';
+  document.getElementById('hintLev').textContent      = document.getElementById('cfgLeverage').value + 'x';
+  document.getElementById('hintDailyLoss').textContent= document.getElementById('cfgDailyLoss').value + '%';
   document.getElementById('hintDrawdown').textContent = document.getElementById('cfgDrawdown').value + '%';
-  document.getElementById('hintTp').textContent      = document.getElementById('cfgTpRatio').value + '×';
-  document.getElementById('hintTrail').textContent   = document.getElementById('cfgTrailing').value + '%';
+  document.getElementById('hintTp').textContent       = document.getElementById('cfgTpRatio').value + '×';
+  document.getElementById('hintTrail').textContent    = document.getElementById('cfgTrailing').value + '%';
 }
 
 function updateRiskMeter() {
   const risk = parseFloat(document.getElementById('cfgRisk').value) || 3.5;
   const lev  = parseFloat(document.getElementById('cfgLeverage').value) || 5;
-  // Score 0-100 basato su risk e leverage
-  const riskScore = Math.min(100, (risk / 10) * 60 + (lev / 20) * 40);
+  const riskScore = Math.min(100, (risk/10)*60 + (lev/20)*40);
   document.getElementById('riskThumb').style.left = riskScore + '%';
+}
+
+// ── Popola campi dal DB ────────────────────────────────
+function _populateFormFromConfig(cfg) {
+  if (!cfg) return;
+  // Valori numerici
+  if (cfg.MAX_RISK_PCT          != null) document.getElementById('cfgRisk').value       = cfg.MAX_RISK_PCT;
+  if (cfg.DEFAULT_LEVERAGE      != null) document.getElementById('cfgLeverage').value   = cfg.DEFAULT_LEVERAGE;
+  if (cfg.MAX_DAILY_LOSS_PCT    != null) document.getElementById('cfgDailyLoss').value  = cfg.MAX_DAILY_LOSS_PCT;
+  if (cfg.MAX_DRAWDOWN_PCT      != null) document.getElementById('cfgDrawdown').value   = cfg.MAX_DRAWDOWN_PCT;
+  if (cfg.TAKE_PROFIT_RATIO     != null) document.getElementById('cfgTpRatio').value    = cfg.TAKE_PROFIT_RATIO;
+  if (cfg.TRAILING_STOP_PCT     != null) document.getElementById('cfgTrailing').value   = cfg.TRAILING_STOP_PCT;
+  if (cfg.MIN_CONFIDENCE        != null) document.getElementById('cfgMinConf').value    = cfg.MIN_CONFIDENCE;
+  if (cfg.MAX_POSITIONS_SPOT    != null) document.getElementById('cfgMaxSpot').value    = cfg.MAX_POSITIONS_SPOT;
+  if (cfg.MAX_POSITIONS_FUTURES != null) document.getElementById('cfgMaxFutures').value = cfg.MAX_POSITIONS_FUTURES;
+  if (cfg.MARGIN_MODE           != null) document.getElementById('cfgMarginMode').value = cfg.MARGIN_MODE;
+  // Toggle strategie
+  if (cfg.ENABLE_RSI_MACD   != null) document.getElementById('togRsiMacd').checked  = cfg.ENABLE_RSI_MACD;
+  if (cfg.ENABLE_BOLLINGER  != null) document.getElementById('togBollinger').checked = cfg.ENABLE_BOLLINGER;
+  if (cfg.ENABLE_BREAKOUT   != null) document.getElementById('togBreakout').checked  = cfg.ENABLE_BREAKOUT;
+  if (cfg.ENABLE_SCALPING   != null) document.getElementById('togScalping').checked  = cfg.ENABLE_SCALPING;
+  if (cfg.ENABLE_EMERGING   != null) document.getElementById('togEmerging').checked  = cfg.ENABLE_EMERGING;
+
+  updateHints();
+  updateRiskMeter();
+
+  // Badge sorgente DB
+  const badge  = document.getElementById('cfgSourceBadge');
+  const source = cfg._source || cfg._storage_backend || '';
+  if (source.includes('postgresql')) {
+    badge.textContent = '● postgresql';
+    badge.className   = 'db-source-badge pg';
+  } else if (source.includes('default')) {
+    badge.textContent = '⚠ default';
+    badge.className   = 'db-source-badge def';
+  } else {
+    badge.textContent = '◎ memory';
+    badge.className   = 'db-source-badge mem';
+  }
+}
+
+// Chiamata da: WS config_updated + render() + init
+function onConfigUpdated(data) {
+  const cfg     = data.config || {};
+  const changed = data.changed || [];
+  const liveTag = data.applied_live ? '⚡ live' : '💾 file';
+
+  if (changed.length > 0) {
+    _setStatus(`${liveTag} — config aggiornata (${changed.length} campi)`, true, 5000);
+    allLogs.push({ ts: new Date().toISOString(), level:'INFO', msg:`[CONFIG] ${changed.length} campi aggiornati dal DB` });
+    renderLogs([]);
+  }
+
+  _populateFormFromConfig(cfg);
 }
 
 // ── Config helpers ────────────────────────────────────
@@ -1173,289 +933,127 @@ function _readFormCfg() {
   };
 }
 
-function _setStatus(text, isOk, autoClear = 6000) {
-  const st = document.getElementById('cfgStatus');
+function _setStatus(text, isOk, autoClear=6000) {
+  const st  = document.getElementById('cfgStatus');
   const btn = document.getElementById('cfgApplyBtn');
   st.textContent = text;
-  st.className   = 'cfg-save-status' + (isOk ? ' ok' : '');
+  st.className   = 'cfg-save-status'+(isOk?' ok':'');
   btn.disabled   = false;
-  btn.textContent = 'Applica configurazione';
-  if (autoClear) setTimeout(() => { st.textContent = ''; }, autoClear);
-}
-
-function _fallbackRailway(cfg) {
-  // Genera blocco env vars pronto per Railway
-  const vars = Object.entries(cfg)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('\n');
-
-  const box = document.createElement('textarea');
-  box.value = vars;
-  box.style.cssText = 'position:fixed;bottom:20px;right:20px;width:400px;height:220px;'
-    + 'z-index:9999;font-family:monospace;font-size:11px;padding:10px;'
-    + 'border:1.5px solid #CE2C31;border-radius:8px;background:#FFF0F0;resize:none;';
-  const close = document.createElement('button');
-  close.textContent = '✕ Chiudi';
-  close.style.cssText = 'position:fixed;bottom:248px;right:20px;z-index:10000;'
-    + 'padding:4px 10px;font-size:11px;cursor:pointer;border-radius:4px;'
-    + 'border:1px solid #CE2C31;background:white;color:#CE2C31;';
-  close.onclick = () => { document.body.removeChild(box); document.body.removeChild(close); };
-  document.body.appendChild(box);
-  document.body.appendChild(close);
-  box.select();
-  try { document.execCommand('copy'); } catch(e) {}
-  _setStatus('📋 Variabili copiate — incollale in Railway → Variables', false, 8000);
+  btn.textContent= 'Applica configurazione';
+  if (autoClear) setTimeout(() => { st.textContent=''; }, autoClear);
 }
 
 async function applyConfig() {
   const cfg = _readFormCfg();
   const btn = document.getElementById('cfgApplyBtn');
-  btn.disabled   = true;
+  btn.disabled    = true;
   btn.textContent = 'Invio...';
-
   try {
-    const r = await fetch('/api/config', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(cfg),
-    });
-
+    const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg) });
     if (!r.ok) {
-      // Errore HTTP (422 validation, 500, ecc.)
       let detail = `HTTP ${r.status}`;
-      try {
-        const err = await r.json();
-        // Pydantic manda { detail: [{loc, msg, type}] }
-        if (Array.isArray(err.detail)) {
-          detail = err.detail.map(e => `${e.loc?.slice(-1)[0]}: ${e.msg}`).join(' | ');
-        } else if (err.detail) {
-          detail = err.detail;
-        }
-      } catch(e) {}
-      _setStatus(`⚠ Errore validazione: ${detail}`, false);
+      try { const err=await r.json(); if(Array.isArray(err.detail)) detail=err.detail.map(e=>`${e.loc?.slice(-1)[0]}: ${e.msg}`).join(' | '); else if(err.detail) detail=err.detail; } catch(e) {}
+      _setStatus(`⚠ Errore: ${detail}`, false);
       return;
     }
-
     const res = await r.json();
-
-    if (res.applied_live) {
-      // Bot stesso processo — cambio immediato
-      _setStatus(`✅ Applicato live — ${res.changed.length} campi modificati`, true);
-      // Log dei campi nel pannello log
-      res.changed.forEach(c => {
-        allLogs.push({ ts: new Date().toISOString(), level: 'INFO', msg: `[CONFIG] ${c}` });
-      });
-      renderLogs([]);
-    } else {
-      // Processo separato — solo file
-      _setStatus('💾 Salvato su file — riavvia il bot Railway per applicare', true);
-    }
-
-  } catch (networkErr) {
-    // Nessun backend raggiungibile → fallback Railway copy
-    console.warn('[CONFIG] Backend non raggiungibile, fallback Railway:', networkErr);
-    _fallbackRailway(cfg);
+    _setStatus(`✅ Applicato live — ${res.changed.length} campi modificati`, true);
+    res.changed.forEach(c => allLogs.push({ ts:new Date().toISOString(), level:'INFO', msg:`[CONFIG] ${c}` }));
+    renderLogs([]);
+  } catch(networkErr) {
+    _setStatus('⚠ Backend non raggiungibile', false);
   }
 }
 
-// ── Gestisce notifica WS config_updated ─────────────
-function onConfigUpdated(data) {
-  // Notifica toast
-  const changed = data.changed || [];
-  const liveTag = data.applied_live ? '⚡ live' : '💾 file';
-  _setStatus(`${liveTag} — config aggiornata (${changed.length} campi)`, true, 5000);
-
-  // Aggiorna i campi del form se la config arriva da un'altra sessione
-  const cfg = data.config || {};
-  if (cfg.MAX_RISK_PCT          != null) document.getElementById('cfgRisk').value       = cfg.MAX_RISK_PCT;
-  if (cfg.DEFAULT_LEVERAGE      != null) document.getElementById('cfgLeverage').value   = cfg.DEFAULT_LEVERAGE;
-  if (cfg.MAX_DAILY_LOSS_PCT    != null) document.getElementById('cfgDailyLoss').value  = cfg.MAX_DAILY_LOSS_PCT;
-  if (cfg.MAX_DRAWDOWN_PCT      != null) document.getElementById('cfgDrawdown').value   = cfg.MAX_DRAWDOWN_PCT;
-  if (cfg.TAKE_PROFIT_RATIO     != null) document.getElementById('cfgTpRatio').value    = cfg.TAKE_PROFIT_RATIO;
-  if (cfg.TRAILING_STOP_PCT     != null) document.getElementById('cfgTrailing').value   = cfg.TRAILING_STOP_PCT;
-  if (cfg.MIN_CONFIDENCE        != null) document.getElementById('cfgMinConf').value    = cfg.MIN_CONFIDENCE;
-  if (cfg.MAX_POSITIONS_SPOT    != null) document.getElementById('cfgMaxSpot').value    = cfg.MAX_POSITIONS_SPOT;
-  if (cfg.MAX_POSITIONS_FUTURES != null) document.getElementById('cfgMaxFutures').value = cfg.MAX_POSITIONS_FUTURES;
-  if (cfg.MARGIN_MODE           != null) document.getElementById('cfgMarginMode').value = cfg.MARGIN_MODE;
-  if (cfg.ENABLE_RSI_MACD       != null) document.getElementById('togRsiMacd').checked  = cfg.ENABLE_RSI_MACD;
-  if (cfg.ENABLE_BOLLINGER      != null) document.getElementById('togBollinger').checked = cfg.ENABLE_BOLLINGER;
-  if (cfg.ENABLE_BREAKOUT       != null) document.getElementById('togBreakout').checked = cfg.ENABLE_BREAKOUT;
-  if (cfg.ENABLE_SCALPING       != null) document.getElementById('togScalping').checked = cfg.ENABLE_SCALPING;
-  if (cfg.ENABLE_EMERGING       != null) document.getElementById('togEmerging').checked = cfg.ENABLE_EMERGING;
-
-  updateHints();
-  updateRiskMeter();
-}
-
 // ════════════════════════════════════════════════════════
-// RESTART BOT
+// RESTART
 // ════════════════════════════════════════════════════════
-function openRestartModal() {
-  document.getElementById('restartModal').classList.add('open');
-}
-
-function closeRestartModal() {
-  document.getElementById('restartModal').classList.remove('open');
-}
+function openRestartModal()  { document.getElementById('restartModal').classList.add('open'); }
+function closeRestartModal() { document.getElementById('restartModal').classList.remove('open'); }
 
 async function confirmRestart() {
   closeRestartModal();
-
   const restartBtn = document.getElementById('cfgRestartBtn');
   const banner     = document.getElementById('restartBanner');
   const countdown  = document.getElementById('restartCountdown');
-  const confirmBtn = document.getElementById('modalConfirmBtn');
-
-  // UI: spinner sul bottone
   restartBtn.disabled = true;
   restartBtn.classList.add('spinning');
   restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvio...';
-
-  // Mostra banner countdown
   banner.classList.add('visible');
   let secs = 30;
   countdown.textContent = secs;
-  const countTimer = setInterval(() => {
-    secs--;
-    countdown.textContent = secs;
-    if (secs <= 0) clearInterval(countTimer);
-  }, 1000);
-
+  const countTimer = setInterval(() => { secs--; countdown.textContent=secs; if(secs<=0) clearInterval(countTimer); }, 1000);
   try {
-    const r = await fetch('/api/restart', { method: 'POST' });
-
+    const r = await fetch('/api/restart', { method:'POST' });
     if (r.ok) {
-      const res = await r.json();
-      _setStatus('&#9203; Riavvio avviato — riconnessione automatica...', true, 0);
-
-      // Aspetta che il bot torni online (polling /api/health ogni 3s per max 60s)
+      _setStatus('&#9203; Riavvio avviato...', true, 0);
       let attempts = 0;
       const checkOnline = setInterval(async () => {
         attempts++;
         try {
-          const h = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+          const h = await fetch('/api/health', { signal:AbortSignal.timeout(2000) });
           if (h.ok) {
-            clearInterval(checkOnline);
-            clearInterval(countTimer);
+            clearInterval(checkOnline); clearInterval(countTimer);
             banner.classList.remove('visible');
-            restartBtn.disabled = false;
-            restartBtn.classList.remove('spinning');
-            restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
-            _setStatus('&#10003; Bot online — configurazione applicata', true, 5000);
-            // Riconnetti WebSocket
-            if (wsConn) wsConn.close();
+            restartBtn.disabled=false; restartBtn.classList.remove('spinning');
+            restartBtn.innerHTML='<span class="restart-icon">&#8635;</span> Riavvia bot';
+            _setStatus('&#10003; Bot online', true, 5000);
+            if(wsConn) wsConn.close();
             setTimeout(connect, 500);
           }
-        } catch(e) {
-          // Bot ancora offline, continua a polling
-        }
-        if (attempts >= 20) {
-          clearInterval(checkOnline);
-          clearInterval(countTimer);
+        } catch(e) {}
+        if (attempts>=20) {
+          clearInterval(checkOnline); clearInterval(countTimer);
           banner.classList.remove('visible');
-          restartBtn.disabled = false;
-          restartBtn.classList.remove('spinning');
-          restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
-          _setStatus('&#9888; Timeout riavvio — controlla Railway Logs', false, 8000);
+          restartBtn.disabled=false; restartBtn.classList.remove('spinning');
+          restartBtn.innerHTML='<span class="restart-icon">&#8635;</span> Riavvia bot';
+          _setStatus('&#9888; Timeout — controlla Railway Logs', false, 8000);
         }
       }, 3000);
-
-    } else {
-      // Endpoint esiste ma errore HTTP
-      clearInterval(countTimer);
-      banner.classList.remove('visible');
-      restartBtn.disabled = false;
-      restartBtn.classList.remove('spinning');
-      restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
-      _setStatus('&#9888; Errore riavvio — vedi Railway Logs', false);
     }
-
-  } catch(networkErr) {
-    // Endpoint /api/restart non disponibile — guida manuale Railway
-    clearInterval(countTimer);
-    banner.classList.remove('visible');
-    restartBtn.disabled = false;
-    restartBtn.classList.remove('spinning');
-    restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
-
-    // Apri guida Railway
-    const guide = 'Per riavviare manualmente:\n\n' +
-      '1. Vai su railway.app\n' +
-      '2. Apri il tuo progetto\n' +
-      '3. Clicca sul servizio bot\n' +
-      '4. Deployments tab\n' +
-      '5. Clicca i 3 puntini sull\'ultimo deploy\n' +
-      '6. Seleziona "Redeploy"\n\n' +
-      'Oppure aggiungi /api/restart al server FastAPI (vedi server_v2.py)';
-    alert(guide);
-    _setStatus('&#8594; Riavvio manuale da Railway necessario', false, 8000);
+  } catch(e) {
+    clearInterval(countTimer); banner.classList.remove('visible');
+    restartBtn.disabled=false; restartBtn.classList.remove('spinning');
+    restartBtn.innerHTML='<span class="restart-icon">&#8635;</span> Riavvia bot';
+    _setStatus('&#9888; Restart non disponibile', false);
   }
 }
 
-// Reset configurazione runtime ai default (env vars Railway)
 async function resetConfig() {
-  if (!confirm('Resettare tutta la configurazione ai valori Railway Variables?\nQuesta operazione non si puo\' annullare.')) return;
-
+  if (!confirm('Resettare tutta la configurazione?\nQuesta operazione non si può annullare.')) return;
   const btn = document.getElementById('cfgResetBtn');
-  btn.textContent = 'Reset...';
-  btn.disabled = true;
-
+  btn.textContent='Reset...'; btn.disabled=true;
   try {
-    const r = await fetch('/api/config', { method: 'DELETE' });
+    const r = await fetch('/api/config', { method:'DELETE' });
     if (r.ok) {
-      _setStatus('&#10003; Config resettata ai valori Railway', true);
-      // Ricarica i valori di default nel form dal server
-      const state = await (await fetch('/api/config')).json();
-      if (state.config) onConfigUpdated({ config: state.config, changed: [] });
-    } else {
-      _setStatus('&#9888; Errore reset', false);
-    }
-  } catch(e) {
-    _setStatus('&#9888; Backend non raggiungibile', false);
-  }
-
-  btn.textContent = 'Reset default';
-  btn.disabled = false;
+      _setStatus('&#10003; Config resettata', true);
+      const cfg = await (await fetch('/api/config')).json();
+      if (cfg) onConfigUpdated({ config:cfg, changed:[] });
+    } else { _setStatus('&#9888; Errore reset', false); }
+  } catch(e) { _setStatus('&#9888; Backend non raggiungibile', false); }
+  btn.textContent='Reset default'; btn.disabled=false;
 }
 
 // ════════════════════════════════════════════════════════
 // HELPERS
 // ════════════════════════════════════════════════════════
 function setFilter(btn) {
-  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   logFilter = btn.dataset.lvl;
   renderLogs(allLogs);
 }
-
 function set(id, val) {
   const el = document.getElementById(id);
   if (el && el.textContent !== String(val)) {
     el.textContent = val;
-    el.classList.remove('updated');
-    void el.offsetWidth;
-    el.classList.add('updated');
+    el.classList.remove('updated'); void el.offsetWidth; el.classList.add('updated');
   }
 }
-
-function fmt(n) {
-  if (n == null) return '—';
-  return n.toLocaleString('it-IT', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' USDT';
-}
-
-function fmtTime(iso) {
-  if (!iso) return '—';
-  try { return new Date(iso).toLocaleTimeString('it-IT', {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
-  catch { return iso; }
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function pollREST() {
-  try { const r = await fetch('/api/state'); if(r.ok) render(await r.json()); } catch(e) {}
-}
+function fmt(n) { if(n==null) return '—'; return n.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' USDT'; }
+function fmtTime(iso) { if(!iso) return '—'; try { return new Date(iso).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); } catch{ return iso; } }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function pollREST() { try { const r=await fetch('/api/state'); if(r.ok) render(await r.json()); } catch(e) {} }
 
 // ════════════════════════════════════════════════════════
 // INIT
@@ -1464,6 +1062,28 @@ connect();
 setInterval(() => { if(!wsConn || wsConn.readyState !== WebSocket.OPEN) pollREST(); }, 5000);
 updateHints();
 updateRiskMeter();
+
+// ═══════════════════════════════════════════════════════
+// FIX 2: fetch /api/config immediata al load della pagina.
+// Senza questa riga, i campi attendevano il primo push WS
+// (3 secondi) mostrando nel frattempo i default HTML.
+// Con force=True lato server legge sempre dal DB fresco.
+// ═══════════════════════════════════════════════════════
+(async function loadConfigOnInit() {
+  try {
+    const r = await fetch('/api/config');
+    if (r.ok) {
+      const cfg = await r.json();
+      if (cfg && Object.keys(cfg).filter(k => !k.startsWith('_')).length > 0) {
+        _populateFormFromConfig(cfg);
+        console.log('[CONFIG INIT] Valori dal DB:', Object.keys(cfg).filter(k=>!k.startsWith('_')).length, 'campi');
+      }
+    }
+  } catch(e) {
+    console.warn('[CONFIG INIT] fetch /api/config fallita:', e);
+  }
+})();
+
 pollREST();
 </script>
 </body>
