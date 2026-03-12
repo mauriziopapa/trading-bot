@@ -1384,7 +1384,7 @@ async function confirmRestart() {
       '2. Apri il tuo progetto\n' +
       '3. Clicca sul servizio bot\n' +
       '4. Deployments tab\n' +
-      '5. Clicca i 3 puntini sull'ultimo deploy\n' +
+      '5. Clicca i 3 puntini sull\'ultimo deploy\n' +
       '6. Seleziona "Redeploy"\n\n' +
       'Oppure aggiungi /api/restart al server FastAPI (vedi server_v2.py)';
     alert(guide);
@@ -1394,7 +1394,7 @@ async function confirmRestart() {
 
 // Reset configurazione runtime ai default (env vars Railway)
 async function resetConfig() {
-  if (!confirm('Resettare tutta la configurazione ai valori Railway Variables?\nQuesta operazione non si puo annullare.')) return;
+  if (!confirm('Resettare tutta la configurazione ai valori Railway Variables?\nQuesta operazione non si puo\' annullare.')) return;
 
   const btn = document.getElementById('cfgResetBtn');
   btn.textContent = 'Reset...';
