@@ -38,6 +38,16 @@ _FIELD_TYPES: dict[str, type] = {
     "ENABLE_BREAKOUT":       bool,
     "ENABLE_SCALPING":       bool,
     "ENABLE_EMERGING":       bool,
+    # ── Emerging scanner — parametri runtime ──────────────────────────────
+    "EM_MIN_VOLUME_USD":     float,   # volume 24h minimo (default 5M)
+    "EM_MIN_CHANGE_24H":     float,   # % cambio 24h minimo (default 5.0)
+    "EM_MIN_VOLUME_SURGE":   float,   # volume surge minimo (default 2.0)
+    "EM_MAX_MARKET_CAP":     float,   # market cap massimo USD (default 2B)
+    "EM_MIN_MARKET_CAP":     float,   # market cap minimo USD (default 0)
+    "EM_MAX_RESULTS":        int,     # max coin risultati (default 10)
+    "EM_NEW_LISTING_DAYS":   int,     # soglia listing recente giorni (default 30)
+    "EM_EXCLUDE_SYMBOLS":    str,     # simboli esclusi CSV (default "")
+    # ── Sentiment ─────────────────────────────────────────────────────────
     "SENTIMENT_BYPASS":       bool,
     "FEAR_GREED_LONG_MIN":    float,
     "FEAR_GREED_LONG_MAX":    float,
