@@ -117,6 +117,17 @@ class TradingBot:
         self.db.connect()
         self._sync_balance()
 
+        # ── LIVE MODE SAFETY CHECK ───────────────────────────────────
+        if settings.IS_LIVE:
+            logger.warning("=" * 60)
+            logger.warning("  *** LIVE ATTIVO — ORDINI REALI SU BITGET ***")
+            logger.warning(f"  Risk/trade:  {settings.MAX_RISK_PCT}%")
+            logger.warning(f"  Leva:        {settings.DEFAULT_LEVERAGE}x {settings.MARGIN_MODE}")
+            logger.warning(f"  Stop giorn:  {settings.MAX_DAILY_LOSS_PCT}%  DD max: {settings.MAX_DRAWDOWN_PCT}%")
+            logger.warning("=" * 60)
+        else:
+            logger.info("Modalita PAPER — zero ordini reali")
+
         try:
             s = self._sentiment.get_sentiment()
             logger.info(f"Sentiment iniziale: {s['label']} (score={s['score']}) | bias={s['bias']}")
@@ -132,10 +143,26 @@ class TradingBot:
         except Exception as e:
             logger.warning(f"Emerging init error: {e}")
 
+        # Legge balance reale — essenziale in live per sizing corretto
+        _bal_spot    = 0.0
+        _bal_futures = 0.0
+        try:
+            if "spot"    in settings.MARKET_TYPES:
+                _bal_spot    = self.exchange.get_usdt_balance("spot")
+            if "futures" in settings.MARKET_TYPES:
+                _bal_futures = self.exchange.get_usdt_balance("futures")
+            logger.info(f"Balance iniziale → Spot: {_bal_spot:.2f} USDT | Futures: {_bal_futures:.2f} USDT")
+            self.risk.session_start_balance = _bal_spot + _bal_futures
+            self.risk.peak_balance          = _bal_spot + _bal_futures
+        except Exception as _e:
+            logger.warning(f"Balance init: {_e}")
+
         self.notifier.startup(
-            settings.TRADING_MODE,
-            settings.SPOT_SYMBOLS    if "spot"    in settings.MARKET_TYPES else [],
-            settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [],
+            mode            = settings.TRADING_MODE,
+            symbols_spot    = settings.SPOT_SYMBOLS    if "spot"    in settings.MARKET_TYPES else [],
+            symbols_futures = settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [],
+            bal_spot        = _bal_spot,
+            bal_futures     = _bal_futures,
         )
 
         # ── Schedule ─────────────────────────────────────────────────────────
@@ -255,7 +282,7 @@ class TradingBot:
     def _process_signal(self, signal: Signal):
         ok, reason = self.risk.can_trade_symbol(signal.symbol, signal.market)
         if not ok:
-            logger.debug(f"[SKIP] {signal.symbol} {signal.market}: {reason}")
+            logger.info(f"[SKIP-RISK] {signal.symbol} {signal.market}: {reason}")
             return
 
         try:
@@ -265,7 +292,7 @@ class TradingBot:
                 ok_s, reason_s = self._sentiment.should_trade_short(signal.symbol)
 
             if not ok_s:
-                logger.debug(f"[SENTIMENT SKIP] {signal.symbol}: {reason_s}")
+                logger.info(f"[SKIP-SENTIMENT] {signal.symbol}: {reason_s}")
                 return
 
             modifier = self._sentiment.confidence_modifier(signal.side)
@@ -277,7 +304,7 @@ class TradingBot:
 
         min_conf = settings.MIN_CONFIDENCE   # dal DB (bot_config)
         if signal.confidence < min_conf:
-            logger.debug(f"[SKIP] {signal.symbol} conf={signal.confidence:.0f}% < {min_conf}%")
+            logger.info(f"[SKIP-CONF] {signal.symbol} conf={signal.confidence:.0f}% < minimo {min_conf}%")
             return
 
         balance = self.exchange.get_usdt_balance(signal.market)
