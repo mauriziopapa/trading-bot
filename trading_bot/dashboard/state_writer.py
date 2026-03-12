@@ -1,13 +1,108 @@
+"""
+State Writer — scrive lo stato completo del bot in JSON
+per la dashboard (ogni minuto via schedule).
+Include: balance, posizioni, segnali, log, sentiment, emerging coins.
+"""
 
-import json, time
+import json
+import os
+import time
+from datetime import datetime, timezone
+from loguru import logger
 
-FILE="dashboard_state.json"
+STATE_FILE = os.path.join(os.path.dirname(__file__), "dashboard_state.json")
 
-def write_state(bot):
-    data={"timestamp2":time.time(),
-        "timestamp":time.time(),
-        "signals":getattr(bot,"_recent_signals",[]),
-        "logs":getattr(bot,"_recent_logs",[])
-    }
-    with open(FILE,"w") as f:
-        json.dump(data,f)
+
+def write_state(bot) -> None:
+    """
+    Serializza lo stato corrente del bot in dashboard_state.json.
+    Chiamata ogni minuto dallo scheduler in main.py.
+    Non solleva mai eccezioni — non deve mai bloccare il bot.
+    """
+    try:
+        from trading_bot.config import settings
+
+        # ── Balance ──────────────────────────────────────────────────────────
+        spot_bal    = 0.0
+        futures_bal = 0.0
+        try:
+            if "spot" in settings.MARKET_TYPES:
+                spot_bal = bot.exchange.get_usdt_balance("spot")
+            if "futures" in settings.MARKET_TYPES:
+                futures_bal = bot.exchange.get_usdt_balance("futures")
+        except Exception:
+            pass
+
+        total = spot_bal + futures_bal
+        start = getattr(bot.risk, "session_start_balance", total) or total
+        pnl_usdt = total - start
+        pnl_pct  = pnl_usdt / start * 100 if start > 0 else 0.0
+
+        # ── Posizioni aperte con PnL live ─────────────────────────────────────
+        positions = []
+        for trade in bot.risk.all_open_trades():
+            try:
+                ticker  = bot.exchange.fetch_ticker(trade["symbol"], trade["market"])
+                current = float(ticker["last"])
+                lev     = settings.DEFAULT_LEVERAGE if trade["market"] == "futures" else 1
+                sign    = 1 if trade["side"] == "buy" else -1
+                pnl_p   = (current - trade["entry"]) / trade["entry"] * 100 * lev * sign
+                pnl_u   = trade["size"] * trade["entry"] * (pnl_p / 100)
+                positions.append({
+                    "symbol":    trade["symbol"],
+                    "market":    trade["market"],
+                    "side":      trade["side"],
+                    "entry":     trade["entry"],
+                    "current":   current,
+                    "size":      trade["size"],
+                    "pnl_pct":   round(pnl_p, 2),
+                    "pnl_usdt":  round(pnl_u, 2),
+                    "strategy":  trade.get("strategy", ""),
+                    "opened_at": trade.get("open_ts", 0),
+                })
+            except Exception:
+                pass
+
+        # ── Sentiment ─────────────────────────────────────────────────────────
+        sentiment_data = None
+        try:
+            analyzer = getattr(bot, "_sentiment", None)
+            if analyzer:
+                sentiment_data = analyzer.get_sentiment()
+        except Exception:
+            pass
+
+        # ── Emerging coins ────────────────────────────────────────────────────
+        emerging_data = []
+        try:
+            scanner = getattr(bot, "_emerging", None)
+            if scanner:
+                emerging_data = scanner.scan()
+        except Exception:
+            pass
+
+        # ── Assembla state ────────────────────────────────────────────────────
+        state = {
+            "mode":        settings.TRADING_MODE,
+            "status":      "running",
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "balance": {
+                "spot":           round(spot_bal, 2),
+                "futures":        round(futures_bal, 2),
+                "total":          round(total, 2),
+                "pnl_today_pct":  round(pnl_pct, 2),
+                "pnl_today_usdt": round(pnl_usdt, 2),
+            },
+            "positions":  positions,
+            "signals":    list(getattr(bot, "_recent_signals", []))[-20:],
+            "logs":       list(getattr(bot, "_recent_logs", []))[-50:],
+            "stats":      bot.risk.stats(),
+            "sentiment":  sentiment_data,
+            "emerging":   emerging_data[:8],
+        }
+
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+
+    except Exception as e:
+        logger.debug(f"[STATE_WRITER] Errore non critico: {e}")
