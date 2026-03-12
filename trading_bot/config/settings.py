@@ -97,11 +97,11 @@ DEFAULT_LEVERAGE = _int("DEFAULT_LEVERAGE", 5)
 MARGIN_MODE      = _str("MARGIN_MODE", "isolated")
 
 # ── Risk Management ──────────────────────────────────────────────────────────
-MAX_RISK_PCT          = _float("MAX_RISK_PCT",          3.5)
-MAX_POSITIONS_SPOT    = _int("MAX_POSITIONS_SPOT",      4)
-MAX_POSITIONS_FUTURES = _int("MAX_POSITIONS_FUTURES",   3)
-MAX_DAILY_LOSS_PCT    = _float("MAX_DAILY_LOSS_PCT",    8.0)
-MAX_DRAWDOWN_PCT      = _float("MAX_DRAWDOWN_PCT",      15.0)
+MAX_RISK_PCT          = _float("MAX_RISK_PCT",          6)
+MAX_POSITIONS_SPOT    = _int("MAX_POSITIONS_SPOT",      6)
+MAX_POSITIONS_FUTURES = _int("MAX_POSITIONS_FUTURES",   6)
+MAX_DAILY_LOSS_PCT    = _float("MAX_DAILY_LOSS_PCT",    10.0)
+MAX_DRAWDOWN_PCT      = _float("MAX_DRAWDOWN_PCT",      18.0)
 TAKE_PROFIT_RATIO     = _float("TAKE_PROFIT_RATIO",     2.5)
 TRAILING_STOP_PCT     = _float("TRAILING_STOP_PCT",     1.2)
 
