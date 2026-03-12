@@ -76,19 +76,12 @@ class TradingBot:
         self.notifier  = TelegramNotifier()
         self.db        = DB()
 
-        # Nuovi moduli
         self._sentiment = SentimentAnalyzer()
-        self._emerging  = EmergingScanner(
-            min_volume_usd       = 5_000_000,
-            min_price_change_24h = 5.0,
-            max_results          = 10,
-        )
+        self._emerging  = EmergingScanner()  # v2: legge tutti i param dal DB a ogni scan
 
-        # Buffer dashboard
         self._recent_signals: list[dict] = []
         self._recent_logs:    list[dict] = []
 
-        # Strategie
         self.strategies: list = []
         if settings.ENABLE_RSI_MACD:
             self.strategies.append(RSIMACDStrategy())
@@ -124,7 +117,6 @@ class TradingBot:
         self.db.connect()
         self._sync_balance()
 
-        # Primo caricamento sentiment ed emerging
         try:
             s = self._sentiment.get_sentiment()
             logger.info(f"Sentiment iniziale: {s['label']} (score={s['score']}) | bias={s['bias']}")
@@ -154,18 +146,11 @@ class TradingBot:
         if settings.ENABLE_SCALPING:
             schedule.every(1).minutes.do(self._scan_scalping)
 
-        # Scan emerging su simboli dinamici ogni 15 min
         schedule.every(15).minutes.do(self._scan_emerging)
-
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(1).hours.do(self._health_check)
-
-        # Aggiorna sentiment ogni 15 minuti
         schedule.every(15).minutes.do(lambda: self._sentiment.get_sentiment(force=True))
-
-        # Aggiorna emerging ogni 30 minuti
         schedule.every(30).minutes.do(lambda: self._emerging.scan(force=True))
-
         schedule.every().day.at("00:05").do(self._daily_report)
 
         if DASHBOARD_ENABLED:
@@ -237,10 +222,6 @@ class TradingBot:
                     logger.error(f"[scan_scalping] {symbol} {market}: {e}")
 
     def _scan_emerging(self):
-        """
-        Scansiona le criptovalute emergenti identificate dall'EmergingScanner
-        con le strategie swing (RSI_MACD + BOLLINGER).
-        """
         swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
         if not swing_strategies:
             return
@@ -252,7 +233,6 @@ class TradingBot:
         logger.info(f"[EMERGING SCAN] Analisi {len(emerging_symbols)} coin emergenti...")
         for symbol in emerging_symbols:
             try:
-                # Verifica che il simbolo esista su Bitget spot
                 df = ohlcv_to_df(
                     self.exchange.fetch_ohlcv(symbol, settings.TF_SWING, 100, "spot")
                 )
@@ -262,7 +242,6 @@ class TradingBot:
                 for strategy in swing_strategies:
                     signal = strategy.analyze(df, symbol, "spot")
                     if signal:
-                        # Boost confidence per segnali su emerging con sentiment favorevole
                         modifier = self._sentiment.confidence_modifier(signal.side)
                         signal.confidence = min(100, signal.confidence * modifier)
                         signal.notes += f" | emerging_boost={modifier:.1f}x"
@@ -279,7 +258,6 @@ class TradingBot:
             logger.debug(f"[SKIP] {signal.symbol} {signal.market}: {reason}")
             return
 
-        # ── Filtro Sentiment ─────────────────────────────────────────────────
         try:
             if signal.side == "buy":
                 ok_s, reason_s = self._sentiment.should_trade_long(signal.symbol)
@@ -290,13 +268,12 @@ class TradingBot:
                 logger.debug(f"[SENTIMENT SKIP] {signal.symbol}: {reason_s}")
                 return
 
-            # Applica modifier sentiment alla confidence
             modifier = self._sentiment.confidence_modifier(signal.side)
             signal.confidence = min(100, signal.confidence * modifier)
             if modifier != 1.0:
                 logger.debug(f"[SENTIMENT] Confidence {signal.symbol} modifier={modifier:.2f}x → {signal.confidence:.0f}%")
         except Exception:
-            pass   # sentiment non blocca mai il bot
+            pass
 
         min_conf = settings.MIN_CONFIDENCE   # dal DB (bot_config)
         if signal.confidence < min_conf:
@@ -342,7 +319,6 @@ class TradingBot:
         executed = order is not None
         order_id = order.get("id", f"unknown_{int(time.time())}") if order else f"failed_{int(time.time())}"
 
-        # Buffer dashboard
         self._recent_signals.append({
             "ts":          datetime.now(timezone.utc).isoformat(),
             "symbol":      signal.symbol,
@@ -471,7 +447,6 @@ class TradingBot:
             positions   = len(self.risk.all_open_trades())
             stats       = self.risk.stats()
             sentiment   = self._sentiment.get_sentiment()
-
             logger.info(
                 f"[HEALTH] Spot={spot_bal:.2f} | Futures={futures_bal:.2f} | "
                 f"Pos={positions} | DailyPnL={stats.get('daily_pnl',0):+.2f}% | "
@@ -514,6 +489,8 @@ class TradingBot:
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
+# FIX: bot = TradingBot() e bot.start() erano fuori da __main__ — venivano
+# eseguiti anche quando il modulo veniva importato (es. da server.py)
 
 if __name__ == "__main__":
     bot = TradingBot()
