@@ -19,14 +19,14 @@ from trading_bot.config import settings
 
 class RSIMACDStrategy(BaseStrategy):
     NAME = "RSI_MACD"
-    MIN_CANDLES = 200    # serve EMA200
+    MIN_CANDLES = 50     # ridotto: EMA100 sostituisce EMA200 quando < 200 candele
 
     def __init__(self,
                  rsi_period: int = 14,
-                 rsi_oversold: float = 32,
-                 rsi_overbought: float = 68,
-                 rsi_exit_long: float = 45,
-                 rsi_exit_short: float = 55):
+                 rsi_oversold: float = 35,       # era 32
+                 rsi_overbought: float = 65,      # era 68
+                 rsi_exit_long: float = 42,        # era 45
+                 rsi_exit_short: float = 58):      # era 55
         self.rsi_period      = rsi_period
         self.rsi_oversold    = rsi_oversold
         self.rsi_overbought  = rsi_overbought
@@ -42,7 +42,8 @@ class RSIMACDStrategy(BaseStrategy):
         # Calcola indicatori
         rsi_series              = ind.rsi(close, self.rsi_period)
         macd_line, sig_line, hist = ind.macd(close)
-        ema200                  = ind.ema(close, 200)
+        ema_long_period         = 200 if len(df) >= 200 else 100
+        ema200                  = ind.ema(close, ema_long_period)  # EMA100 se < 200 candele
         ema50                   = ind.ema(close, 50)
         atr_val                 = self._atr_value(df)
 
@@ -63,10 +64,12 @@ class RSIMACDStrategy(BaseStrategy):
         notes_list = []
 
         # ── LONG Setup ───────────────────────────────────────────────────────
-        if (rsi_p < self.rsi_oversold and rsi > self.rsi_exit_long   # RSI risale
-            and macd_prev < sig_prev and macd_now > sig_now):         # crossover bullish
+        macd_cross_bull = (macd_prev < sig_prev and macd_now > sig_now)
+        macd_bull_zone  = (macd_now > sig_now and hist_now > 0)  # MACD bullish anche senza crossover
+        if (rsi_p < self.rsi_oversold and rsi > self.rsi_exit_long   # RSI risale da oversold
+            and (macd_cross_bull or macd_bull_zone)):                  # MACD favorevole
             side = "buy"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 60.0
 
             if last > e200:         # trend principale rialzista
                 confidence += 10
@@ -83,9 +86,10 @@ class RSIMACDStrategy(BaseStrategy):
 
         # ── SHORT Setup ──────────────────────────────────────────────────────
         elif (rsi_p > self.rsi_overbought and rsi < self.rsi_exit_short
-              and macd_prev > sig_prev and macd_now < sig_now):        # crossover bearish
+              and (macd_now < sig_now and hist_now < 0 or    # MACD bearish zone
+                   macd_prev > sig_prev and macd_now < sig_now)):  # OR crossover bearish
             side = "sell"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 60.0
 
             if last < e200:
                 confidence += 10
@@ -100,14 +104,18 @@ class RSIMACDStrategy(BaseStrategy):
                 confidence += 5
                 notes_list.append(f"RSI={rsi:.1f} zona alta")
 
-        if side is None or confidence < self.MIN_CONFIDENCE:
+        if side is None:
+            logger.debug(f"[RSI_MACD] {symbol} nessun setup (RSI={rsi:.1f} oversold<{self.rsi_oversold} overbought>{self.rsi_overbought})")
+            return None
+        if confidence < self.MIN_CONFIDENCE:
+            logger.debug(f"[RSI_MACD] {symbol} conf={confidence:.0f}% < {self.MIN_CONFIDENCE:.0f}% — scartato")
             return None
 
         # Calcola SL/TP basati su ATR
         sl_mult = 1.8 if market == "spot" else 1.5   # futures: SL più stretto
         stop_loss, take_profit = self._stops(last, side, atr_val, sl_mult)
 
-        logger.debug(f"[RSI_MACD] {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
+        logger.info(f"[RSI_MACD] SEGNALE {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
 
         return Signal(
             strategy    = self.NAME,

@@ -23,9 +23,9 @@ class BollingerStrategy(BaseStrategy):
     def __init__(self,
                  bb_period: int = 20,
                  bb_std: float = 2.0,
-                 rsi_oversold: float = 38,
-                 rsi_overbought: float = 62,
-                 min_bandwidth_pct: float = 2.0):   # BB width minima (evita range flat)
+                 rsi_oversold: float = 42,        # era 38 — più facile entrare LONG
+                 rsi_overbought: float = 58,        # era 62
+                 min_bandwidth_pct: float = 1.2):   # era 2.0 — abbassato per mercati meno volatili
         self.bb_period         = bb_period
         self.bb_std            = bb_std
         self.rsi_oversold      = rsi_oversold
@@ -67,11 +67,11 @@ class BollingerStrategy(BaseStrategy):
         notes_list = []
 
         # ── LONG — rimbalzo da BB lower ──────────────────────────────────────
-        if (prev_low <= lower * 1.002               # tocco banda inferiore
+        if (prev_low <= lower * 1.005               # tocco banda inferiore (era 1.002)
             and last_close > prev_close             # candela di rimbalzo
             and rsi < self.rsi_oversold):
             side = "buy"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 62.0
             notes_list.append(f"rimbalzo BB lower (bw={bandwidth_pct:.1f}%)")
 
             if rsi < 30:
@@ -85,11 +85,11 @@ class BollingerStrategy(BaseStrategy):
                 notes_list.append("chiusura sopra BB lower")
 
         # ── SHORT — rejection da BB upper ────────────────────────────────────
-        elif (prev_high >= upper * 0.998
+        elif (prev_high >= upper * 0.995             # era 0.998
               and last_close < prev_close
               and rsi > self.rsi_overbought):
             side = "sell"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 62.0
             notes_list.append(f"rejection BB upper (bw={bandwidth_pct:.1f}%)")
 
             if rsi > 70:
@@ -102,7 +102,10 @@ class BollingerStrategy(BaseStrategy):
                 confidence += 5
                 notes_list.append("chiusura sotto BB upper")
 
-        if side is None or confidence < self.MIN_CONFIDENCE:
+        if side is None:
+            return None
+        if confidence < self.MIN_CONFIDENCE:
+            logger.debug(f"[BOLLINGER] {symbol} conf={confidence:.0f}% < {self.MIN_CONFIDENCE:.0f}% — scartato")
             return None
 
         # TP al mid band (target naturale del mean reversion)
@@ -114,7 +117,7 @@ class BollingerStrategy(BaseStrategy):
             stop_loss   = round(last_close + sl_dist, 6)
             take_profit = round(max(mid, last_close - sl_dist * settings.TAKE_PROFIT_RATIO), 6)
 
-        logger.debug(f"[BOLLINGER] {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
+        logger.info(f"[BOLLINGER] SEGNALE {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
 
         return Signal(
             strategy    = self.NAME,
