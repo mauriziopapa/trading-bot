@@ -167,9 +167,9 @@ class TradingBot:
 
         # ── Schedule ─────────────────────────────────────────────────────────
         if settings.ENABLE_RSI_MACD or settings.ENABLE_BOLLINGER:
-            schedule.every(5).minutes.do(self._scan_swing)
+            schedule.every(3).minutes.do(self._scan_swing)   # era 5m
         if settings.ENABLE_BREAKOUT:
-            schedule.every(15).minutes.do(self._scan_breakout)
+            schedule.every(10).minutes.do(self._scan_breakout)  # era 15m
         if settings.ENABLE_SCALPING:
             schedule.every(1).minutes.do(self._scan_scalping)
 
@@ -200,7 +200,11 @@ class TradingBot:
         swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
         if not swing_strategies:
             return
-        for market, symbols in self._market_symbol_pairs():
+        all_pairs = self._market_symbol_pairs()
+        total_symbols = sum(len(syms) for _, syms in all_pairs)
+        logger.info(f"[SCAN SWING] Analisi {total_symbols} simboli su {len(all_pairs)} mercati ({settings.TF_SWING})")
+        found = 0
+        for market, symbols in all_pairs:
             for symbol in symbols:
                 try:
                     df = ohlcv_to_df(
@@ -209,9 +213,12 @@ class TradingBot:
                     for strategy in swing_strategies:
                         signal = strategy.analyze(df, symbol, market)
                         if signal:
+                            found += 1
                             self._process_signal(signal)
                 except Exception as e:
                     logger.error(f"[scan_swing] {symbol} {market}: {e}")
+        if found == 0:
+            logger.info(f"[SCAN SWING] Nessun segnale trovato su {total_symbols} simboli")
 
     def _scan_breakout(self):
         strategy = next((s for s in self.strategies if s.NAME == "BREAKOUT"), None)
