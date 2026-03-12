@@ -4,7 +4,7 @@ Solo su simboli ultra-liquidi (BTC/USDT default).
 Logica:
   LONG  — EMA9 > EMA21, Stochastic esce da oversold, VWAP supporto, volume spike
   SHORT — EMA9 < EMA21, Stochastic esce da overbought, VWAP resistenza, volume spike
-TP/SL molto stretti (0.3-0.8% ATR), alta frequenza.
+TP/SL molto stretti (0.4x ATR), alta frequenza.
 """
 
 from typing import Optional
@@ -19,7 +19,9 @@ from trading_bot.config import settings
 class ScalpingStrategy(BaseStrategy):
     NAME = "SCALPING"
     MIN_CANDLES = 60
-    MIN_CONFIDENCE = 60.0    # soglia più alta per scalping
+    # FIX #2: rimossa MIN_CONFIDENCE = 60.0 — class var hardcoded sovrascriveva
+    # la @property di BaseStrategy che legge dal DB (bot_config).
+    # Ora MIN_CONFIDENCE è ereditata correttamente e sempre aggiornata dal DB.
 
     def __init__(self,
                  ema_fast: int = 9,
@@ -78,7 +80,7 @@ class ScalpingStrategy(BaseStrategy):
             and k_now > self.stoch_oversold           # stoch sale
             and k_now > d_now):                       # K > D
             side = "buy"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = self.MIN_CONFIDENCE          # @property → legge dal DB
             notes_list.append("EMA9 cross EMA21 bullish")
             notes_list.append(f"Stoch K={k_now:.1f} risale")
 
@@ -89,7 +91,7 @@ class ScalpingStrategy(BaseStrategy):
                 confidence += 7
                 notes_list.append(f"vol {vol_now:.1f}x")
             if k_now < 40:
-                confidence += 5   # stoch ancora basso = potenziale
+                confidence += 5
                 notes_list.append("stoch zona bassa")
 
         # ── SHORT Scalp ───────────────────────────────────────────────────────
@@ -99,7 +101,7 @@ class ScalpingStrategy(BaseStrategy):
               and k_now < self.stoch_overbought
               and k_now < d_now):
             side = "sell"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = self.MIN_CONFIDENCE          # @property → legge dal DB
             notes_list.append("EMA9 cross EMA21 bearish")
             notes_list.append(f"Stoch K={k_now:.1f} scende")
 
@@ -116,9 +118,9 @@ class ScalpingStrategy(BaseStrategy):
         if side is None or confidence < self.MIN_CONFIDENCE:
             return None
 
-        # SL/TP strettissimi per scalping (0.4x ATR)
+        # SL/TP strettissimi per scalping
         sl_mult = 0.4
-        tp_mult = sl_mult * 1.8    # R:R ridotto ma frequente
+        tp_mult = sl_mult * 1.8    # R:R ridotto ma alta frequenza
         sl_dist = atr_val * sl_mult
         tp_dist = atr_val * tp_mult
 

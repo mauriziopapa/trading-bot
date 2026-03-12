@@ -1,23 +1,23 @@
 """Base class per tutte le strategie."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 import pandas as pd
 
 
 @dataclass
 class Signal:
-    strategy:   str
-    symbol:     str
-    market:     str           # spot | futures
-    side:       str           # buy | sell
-    confidence: float         # 0–100
-    entry:      float
-    stop_loss:  float
+    strategy:    str
+    symbol:      str
+    market:      str           # spot | futures
+    side:        str           # buy | sell
+    confidence:  float         # 0–100
+    entry:       float
+    stop_loss:   float
     take_profit: float
-    atr:        float
-    timeframe:  str
-    notes:      str = ""
+    atr:         float
+    timeframe:   str
+    notes:       str = ""
 
     @property
     def is_long(self) -> bool:
@@ -52,5 +52,6 @@ class BaseStrategy:
         raise NotImplementedError
 
     def _atr_value(self, df: pd.DataFrame) -> float:
-        from utils.indicators import atr
+        # FIX #1: era 'from utils.indicators' (relativo) → causa "No module named 'utils'"
+        from trading_bot.utils.indicators import atr
         return float(atr(df["high"], df["low"], df["close"]).iloc[-1])
