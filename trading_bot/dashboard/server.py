@@ -63,15 +63,28 @@ class ConfigPayload(BaseModel):
 # ── Config I/O — SEMPRE DAL DB tramite settings ───────────────────────────────
 
 def _read_config() -> dict:
+    """
+    Legge la config SEMPRE dal DB (force refresh).
+    FIX: 'if data:' era falsy con {} — usava i default Pydantic anche col DB pieno.
+    FIX: force=True garantisce lettura fresca dal DB, non dalla cache TTL.
+    """
     try:
         from trading_bot.config import settings as S
-        data = S.as_dict()
-        if data:
+        # force=True: salta la cache TTL e rilegge dal DB ora
+        data = S.as_dict(force=True)   # forza lettura fresca dal DB
+        # FIX: 'if data is not None' invece di 'if data'
+        # {} (cache vuota) è falsy → prima tornava sempre i default Pydantic!
+        if data is not None:
             data["_storage_backend"] = S.storage_backend()
+            data["_source"] = "postgresql" if S._db_ok else "memory"
             return data
     except Exception as e:
-        logger.warning(f"[CONFIG] settings.as_dict() fallito: {e}")
-    return ConfigPayload().dict()
+        logger.warning(f"[CONFIG] _read_config fallito: {e}")
+    # Fallback: solo se settings non importabile (primo avvio senza DB)
+    fallback = ConfigPayload().dict()
+    fallback["_storage_backend"] = "fallback_defaults"
+    fallback["_source"] = "pydantic_defaults"
+    return fallback
 
 
 def _write_config(cfg: dict) -> None:
