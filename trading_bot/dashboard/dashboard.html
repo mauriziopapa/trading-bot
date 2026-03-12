@@ -367,7 +367,65 @@
   .cfg-apply-btn:active { opacity: .7; }
   .cfg-apply-btn.danger { background: var(--red); }
   .cfg-save-status { font-size: 11px; color: var(--text3); font-family: var(--mono); }
-  .cfg-save-status.ok { color: var(--green); }
+  .cfg-save-status.ok  { color: var(--green); }
+  .cfg-save-status.err { color: var(--red); }
+
+  /* Restart button */
+  .cfg-restart-btn {
+    padding: 9px 16px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; border: 1.5px solid var(--border);
+    background: var(--surface); color: var(--text2);
+    transition: all .15s; letter-spacing: .2px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .cfg-restart-btn:hover  { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+  .cfg-restart-btn:active { opacity: .7; }
+  .cfg-restart-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .cfg-restart-btn.spinning .restart-icon { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Confirm modal */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,.35); backdrop-filter: blur(2px);
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--surface); border-radius: 12px;
+    border: 1px solid var(--border); box-shadow: 0 8px 32px rgba(0,0,0,.15);
+    padding: 28px 28px 22px; max-width: 380px; width: 90%;
+    animation: modalIn .18s ease;
+  }
+  @keyframes modalIn { from{transform:scale(.95);opacity:0} to{transform:scale(1);opacity:1} }
+  .modal-icon  { font-size: 28px; margin-bottom: 12px; }
+  .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .modal-body  { font-size: 13px; color: var(--text2); line-height: 1.6; margin-bottom: 20px; }
+  .modal-body strong { color: var(--red); }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .modal-cancel {
+    padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 500;
+    cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+    color: var(--text2); transition: all .15s;
+  }
+  .modal-cancel:hover { border-color: var(--text3); color: var(--text); }
+  .modal-confirm {
+    padding: 8px 18px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; border: none; background: var(--red); color: white;
+    transition: opacity .15s;
+  }
+  .modal-confirm:hover { opacity: .85; }
+
+  /* Restart countdown banner */
+  .restart-banner {
+    display: none; position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: white; padding: 10px 20px;
+    border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 999;
+    box-shadow: 0 4px 16px rgba(0,0,0,.2); white-space: nowrap;
+    animation: slideDown .2s ease;
+  }
+  .restart-banner.visible { display: block; }
+  @keyframes slideDown { from{transform:translateX(-50%) translateY(-10px);opacity:0} to{transform:translateX(-50%) translateY(0);opacity:1} }
 </style>
 </head>
 <body>
@@ -654,16 +712,44 @@
           </div>
         </div>
 
-        <!-- Apply -->
+        <!-- Apply + Restart -->
         <div class="cfg-apply-row">
           <button class="cfg-apply-btn" id="cfgApplyBtn" onclick="applyConfig()">Applica configurazione</button>
+          <button class="cfg-restart-btn" id="cfgRestartBtn" onclick="openRestartModal()">
+            <span class="restart-icon">&#8635;</span> Riavvia bot
+          </button>
           <span class="cfg-save-status" id="cfgStatus"></span>
+        </div>
+
+        <!-- Reset config link -->
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:10px;color:var(--text3)">Resetta ai valori Railway Variables</span>
+          <button id="cfgResetBtn" onclick="resetConfig()" style="font-size:10px;color:var(--red);background:none;border:none;cursor:pointer;padding:2px 8px;border-radius:3px;">Reset default</button>
         </div>
 
       </div>
     </div>
 
   </div><!-- end grid-3 -->
+
+  <!-- CONFIRM RESTART MODAL -->
+  <div class="modal-overlay" id="restartModal">
+    <div class="modal-box">
+      <div class="modal-icon">&#9888;&#65039;</div>
+      <div class="modal-title">Riavviare il bot?</div>
+      <div class="modal-body">
+        Il bot si fermer&#224; e si riavvier&#224; applicando la configurazione salvata.<br><br>
+        <strong>Le posizioni aperte rimarranno aperte</strong> &#8212; il bot le monitor&#224; nuovamente al riavvio. Durata: circa <strong>15&#8211;30 secondi</strong>.
+      </div>
+      <div class="modal-actions">
+        <button class="modal-cancel" onclick="closeRestartModal()">Annulla</button>
+        <button class="modal-confirm" id="modalConfirmBtn" onclick="confirmRestart()">Riavvia ora</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESTART BANNER -->
+  <div class="restart-banner" id="restartBanner">&#9203; Bot in riavvio... <span id="restartCountdown">30</span>s</div>
 
   <!-- ── Log ── -->
   <div class="card">
@@ -703,7 +789,13 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   wsConn = new WebSocket(`${proto}://${location.host}/ws`);
   wsConn.onopen  = () => { setConnected(true); clearTimeout(reconnectTimer); setInterval(() => { if(wsConn.readyState===1) wsConn.send('ping'); }, 20000); };
-  wsConn.onmessage = ({data}) => { try { const m=JSON.parse(data); if(m.type==='state') render(m.data); } catch(e){} };
+  wsConn.onmessage = ({data}) => {
+    try {
+      const m = JSON.parse(data);
+      if (m.type === 'state')          render(m.data);
+      if (m.type === 'config_updated') onConfigUpdated(m.data);
+    } catch(e) {}
+  };
   wsConn.onerror = () => setConnected(false);
   wsConn.onclose = () => { setConnected(false); reconnectTimer = setTimeout(connect, 4000); };
 }
@@ -1060,52 +1152,270 @@ function updateRiskMeter() {
   document.getElementById('riskThumb').style.left = riskScore + '%';
 }
 
-function applyConfig() {
-  const cfg = {
-    MAX_RISK_PCT:         parseFloat(document.getElementById('cfgRisk').value),
-    DEFAULT_LEVERAGE:     parseInt(document.getElementById('cfgLeverage').value),
-    MAX_DAILY_LOSS_PCT:   parseFloat(document.getElementById('cfgDailyLoss').value),
-    MAX_DRAWDOWN_PCT:     parseFloat(document.getElementById('cfgDrawdown').value),
-    TAKE_PROFIT_RATIO:    parseFloat(document.getElementById('cfgTpRatio').value),
-    TRAILING_STOP_PCT:    parseFloat(document.getElementById('cfgTrailing').value),
-    MIN_CONFIDENCE:       parseFloat(document.getElementById('cfgMinConf').value),
-    MAX_POSITIONS_SPOT:   parseInt(document.getElementById('cfgMaxSpot').value),
-    MAX_POSITIONS_FUTURES:parseInt(document.getElementById('cfgMaxFutures').value),
-    MARGIN_MODE:          document.getElementById('cfgMarginMode').value,
-    ENABLE_RSI_MACD:      document.getElementById('togRsiMacd').checked,
-    ENABLE_BOLLINGER:     document.getElementById('togBollinger').checked,
-    ENABLE_BREAKOUT:      document.getElementById('togBreakout').checked,
-    ENABLE_SCALPING:      document.getElementById('togScalping').checked,
-    ENABLE_EMERGING:      document.getElementById('togEmerging').checked,
+// ── Config helpers ────────────────────────────────────
+function _readFormCfg() {
+  return {
+    MAX_RISK_PCT:          parseFloat(document.getElementById('cfgRisk').value),
+    DEFAULT_LEVERAGE:      parseInt(document.getElementById('cfgLeverage').value),
+    MAX_DAILY_LOSS_PCT:    parseFloat(document.getElementById('cfgDailyLoss').value),
+    MAX_DRAWDOWN_PCT:      parseFloat(document.getElementById('cfgDrawdown').value),
+    TAKE_PROFIT_RATIO:     parseFloat(document.getElementById('cfgTpRatio').value),
+    TRAILING_STOP_PCT:     parseFloat(document.getElementById('cfgTrailing').value),
+    MIN_CONFIDENCE:        parseFloat(document.getElementById('cfgMinConf').value),
+    MAX_POSITIONS_SPOT:    parseInt(document.getElementById('cfgMaxSpot').value),
+    MAX_POSITIONS_FUTURES: parseInt(document.getElementById('cfgMaxFutures').value),
+    MARGIN_MODE:           document.getElementById('cfgMarginMode').value,
+    ENABLE_RSI_MACD:       document.getElementById('togRsiMacd').checked,
+    ENABLE_BOLLINGER:      document.getElementById('togBollinger').checked,
+    ENABLE_BREAKOUT:       document.getElementById('togBreakout').checked,
+    ENABLE_SCALPING:       document.getElementById('togScalping').checked,
+    ENABLE_EMERGING:       document.getElementById('togEmerging').checked,
   };
+}
 
-  // Invia al backend
-  fetch('/api/config', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(cfg)
-  })
-  .then(r => {
-    const st = document.getElementById('cfgStatus');
-    if (r.ok) {
-      st.textContent = '✓ Salvato — riavvia il bot per applicare';
-      st.className   = 'cfg-save-status ok';
-    } else {
-      st.textContent = '⚠ Endpoint non disponibile — copia i valori in Railway Variables';
-      st.className   = 'cfg-save-status';
+function _setStatus(text, isOk, autoClear = 6000) {
+  const st = document.getElementById('cfgStatus');
+  const btn = document.getElementById('cfgApplyBtn');
+  st.textContent = text;
+  st.className   = 'cfg-save-status' + (isOk ? ' ok' : '');
+  btn.disabled   = false;
+  btn.textContent = 'Applica configurazione';
+  if (autoClear) setTimeout(() => { st.textContent = ''; }, autoClear);
+}
+
+function _fallbackRailway(cfg) {
+  // Genera blocco env vars pronto per Railway
+  const vars = Object.entries(cfg)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('\n');
+
+  const box = document.createElement('textarea');
+  box.value = vars;
+  box.style.cssText = 'position:fixed;bottom:20px;right:20px;width:400px;height:220px;'
+    + 'z-index:9999;font-family:monospace;font-size:11px;padding:10px;'
+    + 'border:1.5px solid #CE2C31;border-radius:8px;background:#FFF0F0;resize:none;';
+  const close = document.createElement('button');
+  close.textContent = '✕ Chiudi';
+  close.style.cssText = 'position:fixed;bottom:248px;right:20px;z-index:10000;'
+    + 'padding:4px 10px;font-size:11px;cursor:pointer;border-radius:4px;'
+    + 'border:1px solid #CE2C31;background:white;color:#CE2C31;';
+  close.onclick = () => { document.body.removeChild(box); document.body.removeChild(close); };
+  document.body.appendChild(box);
+  document.body.appendChild(close);
+  box.select();
+  try { document.execCommand('copy'); } catch(e) {}
+  _setStatus('📋 Variabili copiate — incollale in Railway → Variables', false, 8000);
+}
+
+async function applyConfig() {
+  const cfg = _readFormCfg();
+  const btn = document.getElementById('cfgApplyBtn');
+  btn.disabled   = true;
+  btn.textContent = 'Invio...';
+
+  try {
+    const r = await fetch('/api/config', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(cfg),
+    });
+
+    if (!r.ok) {
+      // Errore HTTP (422 validation, 500, ecc.)
+      let detail = `HTTP ${r.status}`;
+      try {
+        const err = await r.json();
+        // Pydantic manda { detail: [{loc, msg, type}] }
+        if (Array.isArray(err.detail)) {
+          detail = err.detail.map(e => `${e.loc?.slice(-1)[0]}: ${e.msg}`).join(' | ');
+        } else if (err.detail) {
+          detail = err.detail;
+        }
+      } catch(e) {}
+      _setStatus(`⚠ Errore validazione: ${detail}`, false);
+      return;
     }
-    setTimeout(() => { st.textContent = ''; }, 6000);
-  })
-  .catch(() => {
-    // Backend non ha /api/config → mostra i valori come env vars da copiare
-    const vars = Object.entries(cfg).map(([k,v]) => `${k} = ${v}`).join('\n');
-    const st   = document.getElementById('cfgStatus');
-    st.textContent = '📋 Copia le variabili in Railway';
-    st.className   = 'cfg-save-status';
-    console.log('=== RAILWAY VARIABLES ===\n' + vars);
-    alert('Copia queste variabili in Railway → Variables:\n\n' + vars);
-    setTimeout(() => { st.textContent = ''; }, 4000);
-  });
+
+    const res = await r.json();
+
+    if (res.applied_live) {
+      // Bot stesso processo — cambio immediato
+      _setStatus(`✅ Applicato live — ${res.changed.length} campi modificati`, true);
+      // Log dei campi nel pannello log
+      res.changed.forEach(c => {
+        allLogs.push({ ts: new Date().toISOString(), level: 'INFO', msg: `[CONFIG] ${c}` });
+      });
+      renderLogs([]);
+    } else {
+      // Processo separato — solo file
+      _setStatus('💾 Salvato su file — riavvia il bot Railway per applicare', true);
+    }
+
+  } catch (networkErr) {
+    // Nessun backend raggiungibile → fallback Railway copy
+    console.warn('[CONFIG] Backend non raggiungibile, fallback Railway:', networkErr);
+    _fallbackRailway(cfg);
+  }
+}
+
+// ── Gestisce notifica WS config_updated ─────────────
+function onConfigUpdated(data) {
+  // Notifica toast
+  const changed = data.changed || [];
+  const liveTag = data.applied_live ? '⚡ live' : '💾 file';
+  _setStatus(`${liveTag} — config aggiornata (${changed.length} campi)`, true, 5000);
+
+  // Aggiorna i campi del form se la config arriva da un'altra sessione
+  const cfg = data.config || {};
+  if (cfg.MAX_RISK_PCT          != null) document.getElementById('cfgRisk').value       = cfg.MAX_RISK_PCT;
+  if (cfg.DEFAULT_LEVERAGE      != null) document.getElementById('cfgLeverage').value   = cfg.DEFAULT_LEVERAGE;
+  if (cfg.MAX_DAILY_LOSS_PCT    != null) document.getElementById('cfgDailyLoss').value  = cfg.MAX_DAILY_LOSS_PCT;
+  if (cfg.MAX_DRAWDOWN_PCT      != null) document.getElementById('cfgDrawdown').value   = cfg.MAX_DRAWDOWN_PCT;
+  if (cfg.TAKE_PROFIT_RATIO     != null) document.getElementById('cfgTpRatio').value    = cfg.TAKE_PROFIT_RATIO;
+  if (cfg.TRAILING_STOP_PCT     != null) document.getElementById('cfgTrailing').value   = cfg.TRAILING_STOP_PCT;
+  if (cfg.MIN_CONFIDENCE        != null) document.getElementById('cfgMinConf').value    = cfg.MIN_CONFIDENCE;
+  if (cfg.MAX_POSITIONS_SPOT    != null) document.getElementById('cfgMaxSpot').value    = cfg.MAX_POSITIONS_SPOT;
+  if (cfg.MAX_POSITIONS_FUTURES != null) document.getElementById('cfgMaxFutures').value = cfg.MAX_POSITIONS_FUTURES;
+  if (cfg.MARGIN_MODE           != null) document.getElementById('cfgMarginMode').value = cfg.MARGIN_MODE;
+  if (cfg.ENABLE_RSI_MACD       != null) document.getElementById('togRsiMacd').checked  = cfg.ENABLE_RSI_MACD;
+  if (cfg.ENABLE_BOLLINGER      != null) document.getElementById('togBollinger').checked = cfg.ENABLE_BOLLINGER;
+  if (cfg.ENABLE_BREAKOUT       != null) document.getElementById('togBreakout').checked = cfg.ENABLE_BREAKOUT;
+  if (cfg.ENABLE_SCALPING       != null) document.getElementById('togScalping').checked = cfg.ENABLE_SCALPING;
+  if (cfg.ENABLE_EMERGING       != null) document.getElementById('togEmerging').checked = cfg.ENABLE_EMERGING;
+
+  updateHints();
+  updateRiskMeter();
+}
+
+// ════════════════════════════════════════════════════════
+// RESTART BOT
+// ════════════════════════════════════════════════════════
+function openRestartModal() {
+  document.getElementById('restartModal').classList.add('open');
+}
+
+function closeRestartModal() {
+  document.getElementById('restartModal').classList.remove('open');
+}
+
+async function confirmRestart() {
+  closeRestartModal();
+
+  const restartBtn = document.getElementById('cfgRestartBtn');
+  const banner     = document.getElementById('restartBanner');
+  const countdown  = document.getElementById('restartCountdown');
+  const confirmBtn = document.getElementById('modalConfirmBtn');
+
+  // UI: spinner sul bottone
+  restartBtn.disabled = true;
+  restartBtn.classList.add('spinning');
+  restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvio...';
+
+  // Mostra banner countdown
+  banner.classList.add('visible');
+  let secs = 30;
+  countdown.textContent = secs;
+  const countTimer = setInterval(() => {
+    secs--;
+    countdown.textContent = secs;
+    if (secs <= 0) clearInterval(countTimer);
+  }, 1000);
+
+  try {
+    const r = await fetch('/api/restart', { method: 'POST' });
+
+    if (r.ok) {
+      const res = await r.json();
+      _setStatus('&#9203; Riavvio avviato — riconnessione automatica...', true, 0);
+
+      // Aspetta che il bot torni online (polling /api/health ogni 3s per max 60s)
+      let attempts = 0;
+      const checkOnline = setInterval(async () => {
+        attempts++;
+        try {
+          const h = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+          if (h.ok) {
+            clearInterval(checkOnline);
+            clearInterval(countTimer);
+            banner.classList.remove('visible');
+            restartBtn.disabled = false;
+            restartBtn.classList.remove('spinning');
+            restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
+            _setStatus('&#10003; Bot online — configurazione applicata', true, 5000);
+            // Riconnetti WebSocket
+            if (wsConn) wsConn.close();
+            setTimeout(connect, 500);
+          }
+        } catch(e) {
+          // Bot ancora offline, continua a polling
+        }
+        if (attempts >= 20) {
+          clearInterval(checkOnline);
+          clearInterval(countTimer);
+          banner.classList.remove('visible');
+          restartBtn.disabled = false;
+          restartBtn.classList.remove('spinning');
+          restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
+          _setStatus('&#9888; Timeout riavvio — controlla Railway Logs', false, 8000);
+        }
+      }, 3000);
+
+    } else {
+      // Endpoint esiste ma errore HTTP
+      clearInterval(countTimer);
+      banner.classList.remove('visible');
+      restartBtn.disabled = false;
+      restartBtn.classList.remove('spinning');
+      restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
+      _setStatus('&#9888; Errore riavvio — vedi Railway Logs', false);
+    }
+
+  } catch(networkErr) {
+    // Endpoint /api/restart non disponibile — guida manuale Railway
+    clearInterval(countTimer);
+    banner.classList.remove('visible');
+    restartBtn.disabled = false;
+    restartBtn.classList.remove('spinning');
+    restartBtn.innerHTML = '<span class="restart-icon">&#8635;</span> Riavvia bot';
+
+    // Apri guida Railway
+    const guide = 'Per riavviare manualmente:\n\n' +
+      '1. Vai su railway.app\n' +
+      '2. Apri il tuo progetto\n' +
+      '3. Clicca sul servizio bot\n' +
+      '4. Deployments tab\n' +
+      '5. Clicca i 3 puntini sull'ultimo deploy\n' +
+      '6. Seleziona "Redeploy"\n\n' +
+      'Oppure aggiungi /api/restart al server FastAPI (vedi server_v2.py)';
+    alert(guide);
+    _setStatus('&#8594; Riavvio manuale da Railway necessario', false, 8000);
+  }
+}
+
+// Reset configurazione runtime ai default (env vars Railway)
+async function resetConfig() {
+  if (!confirm('Resettare tutta la configurazione ai valori Railway Variables?\nQuesta operazione non si puo annullare.')) return;
+
+  const btn = document.getElementById('cfgResetBtn');
+  btn.textContent = 'Reset...';
+  btn.disabled = true;
+
+  try {
+    const r = await fetch('/api/config', { method: 'DELETE' });
+    if (r.ok) {
+      _setStatus('&#10003; Config resettata ai valori Railway', true);
+      // Ricarica i valori di default nel form dal server
+      const state = await (await fetch('/api/config')).json();
+      if (state.config) onConfigUpdated({ config: state.config, changed: [] });
+    } else {
+      _setStatus('&#9888; Errore reset', false);
+    }
+  } catch(e) {
+    _setStatus('&#9888; Backend non raggiungibile', false);
+  }
+
+  btn.textContent = 'Reset default';
+  btn.disabled = false;
 }
 
 // ════════════════════════════════════════════════════════
