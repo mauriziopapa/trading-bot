@@ -9,7 +9,7 @@ import json
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
@@ -202,24 +202,53 @@ async def get_config():
 
 
 @app.post("/api/config")
-async def update_config(payload: ConfigPayload):
-    cfg = payload.dict()
-    changed = _apply_to_settings(cfg)
+async def update_config(request: Request):
+    """
+    Aggiorna SOLO i campi presenti nel payload (merge con DB).
+    FIX: prima usava ConfigPayload con default Pydantic — campi assenti
+    venivano riempiti con i default e sovrascrivevano il DB (es.
+    salvataggio filtri EM_ resettava leva, confidence, ecc.).
+    Ora: legge il DB corrente, applica solo le chiavi presenti nel JSON.
+    """
+    try:
+        raw = await request.json()
+    except Exception:
+        raw = {}
+
+    # Legge config corrente dal DB come base (non usa i default Pydantic)
+    current = _read_config()
+    # Rimuove metadati interni
+    current.pop("_storage_backend", None)
+    current.pop("_source", None)
+
+    # Merge: sovrascrive SOLO i campi ricevuti
+    merged = {**current, **raw}
+
+    # Valida i campi presenti (solo quelli nel payload) con ConfigPayload
+    # per i vincoli ge/le — ma senza riempire i mancanti
+    from pydantic import ValidationError
+    try:
+        ConfigPayload(**merged)   # validazione completa sul merged
+    except ValidationError as ve:
+        return {"ok": False, "error": str(ve)}
+
+    changed = _apply_to_settings(merged)
     applied_live = True
+
+    # Rilegge config aggiornata per il broadcast
+    updated_cfg = _read_config()
+    updated_cfg.pop("_storage_backend", None)
+    updated_cfg.pop("_source", None)
 
     await manager.broadcast({
         "type": "config_updated",
-        "data": {"config": cfg, "changed": changed, "applied_live": applied_live}
+        "data": {"config": updated_cfg, "changed": changed, "applied_live": applied_live}
     })
 
-    if applied_live:
-        msg = f"✅ Configurazione applicata live ({len(changed)} campi modificati). Nessun restart necessario."
-    else:
-        msg = "💾 Configurazione salvata su file. Verrà applicata al prossimo avvio."
-
+    msg = f"✅ Configurazione applicata live ({len(changed)} campi modificati). Nessun restart necessario."
     logger.info(f"[CONFIG] {msg}")
     return {"ok": True, "saved": True, "applied_live": applied_live,
-            "changed": changed, "config": cfg, "message": msg}
+            "changed": changed, "config": updated_cfg, "message": msg}
 
 
 @app.delete("/api/config")
