@@ -343,6 +343,13 @@ class TradingBot:
     # ── Signal Processing ─────────────────────────────────────────────────────
 
     def _process_signal(self, signal: Signal, risk_multiplier: float = 1.0):
+        # ── Spot: solo BUY — i SELL su spot richiedono di possedere la coin ──
+        # Gli short vanno fatti solo su futures (perpetui).
+        # Un SELL spot senza la coin → Bitget 43012 "Insufficient balance"
+        if signal.market == "spot" and signal.side == "sell":
+            logger.debug(f"[SKIP-SPOT-SELL] {signal.symbol}: SELL su spot non supportato → usa futures")
+            return
+
         ok, reason = self.risk.can_trade_symbol(signal.symbol, signal.market)
         if not ok:
             logger.info(f"[SKIP-RISK] {signal.symbol} {signal.market}: {reason}")
@@ -421,6 +428,10 @@ class TradingBot:
         executed = order is not None
         order_id = order.get("id", f"unknown_{int(time.time())}") if order else f"failed_{int(time.time())}"
 
+        if not executed:
+            logger.error(f"[ORDER FAILED] {signal.market.upper()} {signal.side.upper()} {signal.symbol} — ordine non eseguito")
+            return
+
         self._recent_signals.append({
             "ts":          datetime.now(timezone.utc).isoformat(),
             "symbol":      signal.symbol,
@@ -434,10 +445,6 @@ class TradingBot:
             "executed":    executed,
         })
         self._recent_signals = self._recent_signals[-50:]
-
-        if not executed:
-            logger.error(f"Ordine fallito per {signal.symbol}")
-            return
 
         trade_data = {
             "order_id":    order_id,
