@@ -6,7 +6,6 @@ numpy==2.2.6
 pandas==2.2.2
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
-python-telegram-bot==20.7
 requests==2.31.0
 schedule==1.2.1
 sqlalchemy==2.0.29
