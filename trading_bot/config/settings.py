@@ -136,11 +136,17 @@ def _db_load(engine) -> dict[str, Any] | None:
                 {"keys": list(_RUNTIME_FIELDS)}
             ).fetchall()
         result = {}
-        for key, val_json in rows:
+        for key, val_raw in rows:
             try:
-                result[key] = _cast(key, json.loads(val_json))
+                # Prova JSON (valori salvati da _db_save con json.dumps)
+                # Se fallisce (es. 'isolated' inserito via SQL raw) usa il valore grezzo
+                try:
+                    parsed = json.loads(val_raw)
+                except (json.JSONDecodeError, TypeError):
+                    parsed = val_raw   # stringa plain → usala direttamente
+                result[key] = _cast(key, parsed)
             except Exception as e:
-                log.warning(f"[settings] cast error {key}={val_json!r}: {e}")
+                log.warning(f"[settings] cast error {key}={val_raw!r}: {e}")
         return result
     except Exception as e:
         log.error(f"[settings] db_load fallito: {e}")
