@@ -154,11 +154,20 @@
   .sentiment-label { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
   .sentiment-bias  { font-size: 11px; color: var(--text2); margin-bottom: 8px; }
   .sentiment-signals { display: flex; flex-direction: column; gap: 1px; }
-  .sent-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border2); font-size: 12px; }
+  /* fonte row — griglia 4 col: icona | nome+raw | barra | badge */
+  .sent-row { display: grid; grid-template-columns: 22px 1fr 80px 44px; gap: 6px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border2); font-size: 12px; }
   .sent-row:last-child { border-bottom: none; }
-  .sent-source { color: var(--text2); font-weight: 500; }
-  .sent-val    { font-family: var(--mono); font-size: 11px; color: var(--text); }
-  .sent-badge  { font-size: 9px; font-weight: 600; letter-spacing: .4px; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; }
+  .sent-icon   { font-size: 13px; text-align: center; }
+  .sent-source { color: var(--text2); font-weight: 500; font-size: 11px; }
+  .sent-val    { font-family: var(--mono); font-size: 10px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* barra contributo */
+  .sent-bar-wrap { height: 5px; background: var(--border2); border-radius: 3px; overflow: hidden; }
+  .sent-bar-fill { height: 100%; border-radius: 3px; transition: width .5s ease; }
+  .sent-bar-ok   { background: var(--green); }
+  .sent-bar-warn { background: var(--yellow); }
+  .sent-bar-danger{ background: var(--red); }
+  .sent-score-tiny { font-size: 9px; font-family: var(--mono); color: var(--text3); text-align: right; margin-top: 2px; }
+  .sent-badge  { font-size: 9px; font-weight: 600; letter-spacing: .4px; padding: 2px 6px; border-radius: 10px; text-transform: uppercase; text-align: center; }
   .badge-ok  { background: var(--green-bg); color: var(--green); }
   .badge-ko  { background: var(--red-bg);   color: var(--red); }
   .badge-war { background: var(--yellow-bg);color: var(--yellow); }
@@ -168,6 +177,22 @@
   .bias-bull { background: var(--green-bg); color: var(--green); }
   .bias-bear { background: var(--red-bg);   color: var(--red); }
   .bias-neut { background: var(--border2);  color: var(--text2); }
+  /* striscia peso fonti in testa al pannello */
+  .sent-weights-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin: 0 16px 0; }
+  .swb-seg { height: 100%; transition: width .4s; }
+  /* sezione news headlines espandibile */
+  .sent-headlines { padding: 6px 16px 10px; display: none; }
+  .sent-headlines.open { display: block; }
+  .sent-headlines-title { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 5px; }
+  .sent-headline-item { font-size: 11px; color: var(--text2); padding: 3px 0; border-bottom: 1px solid var(--border2); line-height: 1.4; }
+  .sent-headline-item:last-child { border-bottom: none; }
+  .sent-toggle { font-size: 10px; color: var(--blue); cursor: pointer; text-align: center; padding: 5px 0 8px; display: none; }
+  .sent-toggle.visible { display: block; }
+  /* sezione trending coins pills */
+  .sent-trending-pills { padding: 0 16px 10px; display: none; }
+  .sent-trending-pills.open { display: flex; flex-wrap: wrap; gap: 4px; }
+  .trend-pill { font-size: 10px; font-family: var(--mono); padding: 2px 8px; border-radius: 10px; background: var(--border2); color: var(--text); }
+  .trend-pill.major { background: var(--blue-bg, #dbeafe); color: var(--blue); }
 
   /* EMERGING */
   .emerging-list { display: flex; flex-direction: column; }
@@ -366,6 +391,7 @@
         <span class="card-title">Sentiment Mercato</span>
         <span id="sentUpdated" style="font-size:10px;color:var(--text3);font-family:var(--mono)">—</span>
       </div>
+      <!-- Gauge + score aggregato -->
       <div class="sentiment-score-wrap">
         <div class="sentiment-gauge">
           <svg viewBox="0 0 36 36">
@@ -379,11 +405,22 @@
         </div>
         <div class="sentiment-info">
           <div class="sentiment-label" id="sentLabel">—</div>
-          <div class="sentiment-bias" id="sentBiasText">—</div>
+          <div class="sentiment-bias"  id="sentBiasText">—</div>
           <span class="bias-pill bias-neut" id="sentBiasPill">—</span>
         </div>
       </div>
+      <!-- Barra composizione pesi (6 colori) -->
+      <div class="sent-weights-bar" id="sentWeightsBar" title="Composizione fonti per peso"></div>
+      <!-- Tabella 6 fonti -->
       <div class="sentiment-signals" id="sentRows"></div>
+      <!-- Headlines CryptoPanic (espandibile) -->
+      <div id="sentHeadlines" class="sent-headlines">
+        <div class="sent-headlines-title">Ultime news CryptoPanic</div>
+        <div id="sentHeadlinesList"></div>
+      </div>
+      <div id="sentHeadlinesToggle" class="sent-toggle" onclick="toggleHeadlines()">▼ mostra news</div>
+      <!-- Trending coins pills (espandibile) -->
+      <div id="sentTrendingPills" class="sent-trending-pills"></div>
     </div>
 
     <!-- EMERGING -->
@@ -768,8 +805,23 @@ function renderMeta(state) {
 }
 
 // ════════════════════════════════════════════════════════
-// SENTIMENT
+// SENTIMENT v2 — 6 fonti
 // ════════════════════════════════════════════════════════
+var _sentHeadlinesOpen  = false;
+var _sentLastHeadlines  = [];
+var _sentLastCoins      = [];
+
+// Colori per le 6 fonti nella barra pesi
+var _SOURCE_COLORS = {
+  fear_greed: '#CE2C31',
+  funding:    '#AD5700',
+  ls_ratio:   '#006ADC',
+  trending:   '#16A34A',
+  news:       '#7C3AED',
+  oi_delta:   '#0891B2',
+};
+var _SOURCE_ORDER = ['fear_greed','funding','ls_ratio','trending','news','oi_delta'];
+
 function renderSentiment(s) {
   if (!s) {
     document.getElementById('gaugeNum').textContent  = '—';
@@ -778,39 +830,159 @@ function renderSentiment(s) {
     document.getElementById('sentRows').innerHTML = '<div class="empty-state">In attesa del bot...</div>';
     return;
   }
+
+  // ── Gauge ──────────────────────────────────────────────────────────
   const score = s.score || 50;
   const arc   = document.getElementById('gaugeArc');
   arc.setAttribute('stroke-dashoffset', 100 - score);
-  arc.setAttribute('stroke', score < 25 ? '#CE2C31' : score < 45 ? '#AD5700' : score < 55 ? '#006ADC' : score < 75 ? '#AD5700' : '#CE2C31');
-  document.getElementById('gaugeNum').textContent = score;
-  // Aggiorna F&G live nel pannello config
+  const gaugeColor = score < 25 ? '#CE2C31' : score < 45 ? '#AD5700' :
+                     score < 55 ? '#006ADC' : score < 75 ? '#AD5700' : '#CE2C31';
+  arc.setAttribute('stroke', gaugeColor);
+  const gNum = document.getElementById('gaugeNum');
+  gNum.textContent = score;
+  gNum.style.color = gaugeColor;
+
+  // Aggiorna F&G live nel pannello config (backward compat)
   const fgLive = document.getElementById('sentFgLive');
-  if (fgLive) fgLive.textContent = (s.fear_greed != null ? s.fear_greed : score) + ' (' + (s.fear_greed_label || s.label) + ')';
-  document.getElementById('gaugeNum').style.color =
-    score < 25 ? 'var(--red)' : score > 75 ? 'var(--red)' : score < 45 || score > 55 ? 'var(--yellow)' : 'var(--blue)';
-  document.getElementById('sentLabel').textContent = s.label || '—';
-  document.getElementById('sentUpdated').textContent = fmtTime(new Date().toISOString());
+  if (fgLive) fgLive.textContent = (s.fear_greed != null ? s.fear_greed : score) +
+                                    ' (' + (s.fear_greed_label || s.label) + ')';
+
+  document.getElementById('sentLabel').textContent    = s.label || '—';
+  document.getElementById('sentUpdated').textContent  = fmtTime(new Date().toISOString());
+
+  // ── Bias pill ──────────────────────────────────────────────────────
   const bias = s.bias || 'neutral';
   const bpill = document.getElementById('sentBiasPill');
-  const biasMap = { bullish:['bias-bull','🐂 Bullish contrarian'], bearish:['bias-bear','🐻 Bearish contrarian'], neutral:['bias-neut','⚖️ Neutro'] };
+  const biasMap = {
+    bullish: ['bias-bull','🐂 Bullish contrarian'],
+    bearish: ['bias-bear','🐻 Bearish contrarian'],
+    neutral: ['bias-neut','⚖️ Neutro']
+  };
   const [bcls, btxt] = biasMap[bias] || biasMap.neutral;
-  bpill.className   = `bias-pill ${bcls}`;
+  bpill.className   = 'bias-pill ' + bcls;
   bpill.textContent = btxt;
   document.getElementById('sentBiasText').textContent =
-    bias==='bullish' ? 'LONG favoriti (+1.3× conf)' : bias==='bearish' ? 'SHORT favoriti (+1.3× conf)' : 'Tutte le strategie operative';
-  const rows = [
-    { source:'Fear & Greed', val: s.fear_greed!=null?`${s.fear_greed} — ${s.fear_greed_label}`:'—', badge: fgBadge(s.fear_greed), thresh:'OK: 25–75 | WARN: 15–85 | KO: <15 >85' },
-    { source:'Funding BTC',  val: s.funding_btc!=null?`${s.funding_btc.toFixed(3)}% / 8h`:'—',   badge: fundingBadge(s.funding_btc), thresh:'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10' },
-    { source:'Funding ETH',  val: s.funding_eth!=null?`${s.funding_eth.toFixed(3)}% / 8h`:'—',   badge: fundingBadge(s.funding_eth), thresh:'OK: -0.02..+0.05 | WARN: +0.05..+0.10 | KO: >0.10' },
-    { source:'L/S Ratio BTC',val: s.ls_ratio_btc!=null?s.ls_ratio_btc.toFixed(3):'—',             badge: lsBadge(s.ls_ratio_btc), thresh:'OK: 0.7–1.5 | WARN: 1.5–2.0 | KO: >2.0 <0.5' },
-  ];
-  document.getElementById('sentRows').innerHTML = rows.map(r => `
-    <div class="sent-row">
-      <div><div class="sent-source">${r.source}</div><div class="sent-threshold">${r.thresh}</div></div>
-      <div class="sent-val">${r.val}</div>
-      <span class="sent-badge ${r.badge.cls}">${r.badge.txt}</span>
-    </div>`).join('');
+    bias === 'bullish' ? 'LONG favoriti (+1.3× conf)' :
+    bias === 'bearish' ? 'SHORT favoriti (+1.3× conf)' :
+    'Tutte le strategie operative';
+
+  // ── Barra pesi colorata ─────────────────────────────────────────────
+  const wBar = document.getElementById('sentWeightsBar');
+  if (wBar) {
+    const weights = { fear_greed:30, funding:20, ls_ratio:10, trending:15, news:15, oi_delta:10 };
+    wBar.innerHTML = _SOURCE_ORDER.map(id =>
+      `<div class="swb-seg" style="width:${weights[id]}%;background:${_SOURCE_COLORS[id]}" title="${id}"></div>`
+    ).join('');
+  }
+
+  // ── Righe dettaglio fonti ──────────────────────────────────────────
+  // Usa sources[] dal backend se disponibile, altrimenti costruisce da raw v1
+  const sources = s.sources && s.sources.length ? s.sources : _buildLegacySources(s);
+
+  document.getElementById('sentRows').innerHTML = sources.map(src => {
+    const bdg   = _statusBadge(src.status);
+    const barPct = Math.round(src.score || 0);
+    const barCls = src.status === 'danger' ? 'sent-bar-danger' :
+                   src.status === 'warn'   ? 'sent-bar-warn' : 'sent-bar-ok';
+    const color  = _SOURCE_COLORS[src.id] || '#888';
+    return `<div class="sent-row">
+      <div class="sent-icon">${src.icon || '•'}</div>
+      <div>
+        <div class="sent-source">${src.name}</div>
+        <div class="sent-val">${src.raw || '—'}</div>
+      </div>
+      <div>
+        <div class="sent-bar-wrap">
+          <div class="sent-bar-fill ${barCls}" style="width:${barPct}%;background:${color}"></div>
+        </div>
+        <div class="sent-score-tiny">${barPct}/100 · w${Math.round((src.weight||0)*100)}%</div>
+      </div>
+      <span class="sent-badge ${bdg.cls}">${bdg.txt}</span>
+    </div>`;
+  }).join('');
+
+  // ── Headlines CryptoPanic ─────────────────────────────────────────
+  const newsSrc = sources.find(x => x.id === 'news');
+  _sentLastHeadlines = (newsSrc && newsSrc.extra && newsSrc.extra.headlines) ||
+                       s.news_headlines || [];
+  const tgl = document.getElementById('sentHeadlinesToggle');
+  if (_sentLastHeadlines.length) {
+    tgl && tgl.classList.add('visible');
+    _refreshHeadlines();
+  } else {
+    tgl && tgl.classList.remove('visible');
+  }
+
+  // ── Trending coins pills ───────────────────────────────────────────
+  const trendSrc = sources.find(x => x.id === 'trending');
+  _sentLastCoins = (trendSrc && trendSrc.extra && trendSrc.extra.coins) ||
+                   s.trending_coins || [];
+  const pillsEl = document.getElementById('sentTrendingPills');
+  if (pillsEl && _sentLastCoins.length) {
+    pillsEl.classList.add('open');
+    const MAJORS = new Set(['BTC','ETH','SOL','BNB','XRP','ADA','AVAX','DOT','MATIC','LINK']);
+    pillsEl.innerHTML = _sentLastCoins.map(c =>
+      `<span class="trend-pill${MAJORS.has(c) ? ' major' : ''}">${c}</span>`
+    ).join('');
+  }
 }
+
+function _buildLegacySources(s) {
+  // Compatibilità con backend v1 (no sources[])
+  return [
+    { id:'fear_greed', name:'Fear & Greed', icon:'😱', score: s.fear_greed||50,
+      raw: `${s.fear_greed} — ${s.fear_greed_label}`, weight:0.30,
+      status: fgStatus(s.fear_greed) },
+    { id:'funding', name:'Funding BTC', icon:'💰', score: s.funding_btc!=null ? fundScore(s.funding_btc) : 50,
+      raw: s.funding_btc!=null ? `BTC ${s.funding_btc.toFixed(3)}% / ETH ${(s.funding_eth||0).toFixed(3)}%` : '—',
+      weight:0.20, status: fundStatus(s.funding_btc) },
+    { id:'ls_ratio', name:'Long/Short Ratio', icon:'⚖️', score: s.ls_ratio_btc!=null ? lsScore(s.ls_ratio_btc) : 50,
+      raw: s.ls_ratio_btc!=null ? s.ls_ratio_btc.toFixed(3) : '—',
+      weight:0.10, status: lsStatus(s.ls_ratio_btc) },
+    { id:'trending', name:'CoinGecko Trending', icon:'🔥', score: s.trending_score||50,
+      raw: (s.trending_coins||[]).join(', ')||'—', weight:0.15, status:'ok' },
+    { id:'news', name:'CryptoPanic News', icon:'📰', score: s.news_score||50,
+      raw: `+${s.news_bullish||0} / -${s.news_bearish||0}`, weight:0.15, status:'ok',
+      extra:{ headlines: s.news_headlines||[] } },
+    { id:'oi_delta', name:'Open Interest Δ', icon:'📊', score:50,
+      raw: `BTC ${(s.oi_btc_pct||0).toFixed(1)}% / ETH ${(s.oi_eth_pct||0).toFixed(1)}%`,
+      weight:0.10, status:'ok' },
+  ];
+}
+
+function _statusBadge(st) {
+  if (st === 'danger') return { cls:'badge-ko',  txt:'KO' };
+  if (st === 'warn')   return { cls:'badge-war', txt:'WARN' };
+  return { cls:'badge-ok', txt:'OK' };
+}
+
+function toggleHeadlines() {
+  _sentHeadlinesOpen = !_sentHeadlinesOpen;
+  _refreshHeadlines();
+  const tgl = document.getElementById('sentHeadlinesToggle');
+  if (tgl) tgl.textContent = _sentHeadlinesOpen ? '▲ nascondi news' : '▼ mostra news';
+}
+
+function _refreshHeadlines() {
+  const el = document.getElementById('sentHeadlines');
+  const ls = document.getElementById('sentHeadlinesList');
+  if (!el || !ls) return;
+  if (_sentHeadlinesOpen && _sentLastHeadlines.length) {
+    el.classList.add('open');
+    ls.innerHTML = _sentLastHeadlines.map(h =>
+      `<div class="sent-headline-item">${h}</div>`).join('');
+  } else {
+    el.classList.remove('open');
+  }
+}
+
+// Helper backward-compat per badge legacy
+function fgStatus(v)   { if(v==null) return'neu'; if(v<15||v>85) return'danger'; if(v<25||v>75) return'warn'; return'ok'; }
+function fundStatus(v) { if(v==null) return'neu'; if(v>0.10||v<-0.05) return'danger'; if(v>0.05) return'warn'; return'ok'; }
+function lsStatus(v)   { if(v==null) return'neu'; if(v>2.0||v<0.5) return'danger'; if(v>1.5) return'warn'; return'ok'; }
+function fundScore(v)  { if(v>0.10) return 88; if(v>0.05) return 72; if(v<-0.05) return 12; if(v<-0.02) return 28; return 50; }
+function lsScore(v)    { if(v>=2.0) return 85; if(v>=1.5) return 70; if(v<=0.5) return 15; if(v<=0.7) return 30; return 50; }
+// legacy badge helpers (usati altrove nel codice esistente)
 function fgBadge(v)      { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v<15||v>85) return{cls:'badge-ko',txt:'KO'}; if(v<25||v>75) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
 function fundingBadge(v) { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>0.10||v<-0.05) return{cls:'badge-ko',txt:'KO'}; if(v>0.05) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
 function lsBadge(v)      { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>2.0||v<0.5) return{cls:'badge-ko',txt:'KO'}; if(v>1.5) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
