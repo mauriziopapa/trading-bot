@@ -251,8 +251,12 @@ class DynamicSettings:
         except AttributeError:
             return None
 
-    def as_dict(self) -> dict:
-        self._refresh()
+    def as_dict(self, force: bool = False) -> dict:
+        """
+        Ritorna tutti i valori dalla cache (sincronizzata col DB).
+        force=True: forza rilettura immediata dal DB, bypassa TTL.
+        """
+        self._refresh(force=force)
         return dict(self._cache)
 
     def storage_backend(self) -> str:
