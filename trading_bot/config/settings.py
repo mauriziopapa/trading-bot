@@ -1,19 +1,18 @@
 """
-settings.py — Configurazione con persistenza PostgreSQL.
+settings.py - Configurazione centralizzata con DynamicSettings.
 
-Priorità (dal basso all'alto):
+Priorita (dal basso all'alto):
   1. Default hardcoded
-  2. Variabili d'ambiente Railway (env vars)
-  3. Tabella bot_config su PostgreSQL  ← sopravvive ai riavvii Railway
-  4. Override in-memory (set_many)     ← applicazione immediata
+  2. Railway Variables (env vars) - lette ogni volta
+  3. PostgreSQL tabella bot_config - PERSISTENTE tra restart
+  4. Override in-memory (set_many) - cambio immediato stesso processo
 
-PERCHE' POSTGRESQL E NON FILE:
-  Railway usa filesystem EFIMERO — ogni restart/deploy svuota /app.
-  Il database PostgreSQL Railway e' PERMANENTE e sopravvive a tutti i restart.
+PERCHE PostgreSQL e non un file:
+  Railway ha filesystem EFIMERO - ogni restart azzera tutto.
+  Il database PostgreSQL e' l'unico storage persistente garantito.
 """
 
 from __future__ import annotations
-
 import os
 import time
 import json
@@ -22,7 +21,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Fallback: file locale se DB non disponibile (sviluppo locale)
+# ── Fallback file (usato solo se DB non disponibile) ──────────────────────────
 _HERE = os.path.dirname(__file__)
 _FALLBACK_FILE = os.path.normpath(
     os.path.join(_HERE, "..", "dashboard", "runtime_config.json")
@@ -31,12 +30,12 @@ _FALLBACK_FILE = os.path.normpath(
 
 class DynamicSettings:
     """
-    Singleton configurazione. Legge/scrive su PostgreSQL (tabella bot_config).
-    Refresh automatico ogni REFRESH_INTERVAL secondi.
-    Fallback su file locale se DATABASE_URL non e' impostato.
+    Singleton configurazione. Priorita':
+      in-memory > PostgreSQL (ogni 10s) > env vars > default hardcoded
     """
 
-    REFRESH_INTERVAL = 8.0   # secondi tra un DB read e l'altro
+    DB_REFRESH_INTERVAL = 10.0   # secondi tra reload da DB
+    FILE_REFRESH_INTERVAL = 5.0  # secondi tra reload da file (fallback)
 
     _DEFAULTS: dict[str, Any] = {
         "MAX_RISK_PCT":          3.5,
@@ -59,161 +58,227 @@ class DynamicSettings:
     _RUNTIME_FIELDS = set(_DEFAULTS.keys())
 
     def __init__(self):
-        self._db_cache: dict[str, Any] = {}
-        self._cache_ts: float = 0.0
-        self._mem: dict[str, Any] = {}
-        self._db_ready: bool = False
-        self._db_init_attempted: bool = False
+        self._mem: dict[str, Any] = {}          # override in-process immediati
+        self._db_cache: dict[str, Any] = {}     # cache dal DB
+        self._db_cache_ts: float = 0.0
+        self._file_cache: dict[str, Any] = {}   # cache dal file (fallback)
+        self._file_cache_ts: float = 0.0
+        self._db_available: bool | None = None  # None = non ancora testato
 
     # ------------------------------------------------------------------ DB
 
     def _get_db_url(self) -> str:
         return os.getenv("DATABASE_URL", "")
 
-    def _ensure_table(self, conn) -> bool:
-        """Crea la tabella bot_config se non esiste. Ritorna True se ok."""
+    def _try_load_from_db(self) -> dict:
+        """Carica config da PostgreSQL. Ritorna {} se fallisce."""
         try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS bot_config (
-                    key   VARCHAR(64) PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            conn.execute("COMMIT")
+            from sqlalchemy import create_engine, text
+            url = self._get_db_url()
+            if not url:
+                return {}
+
+            engine = create_engine(
+                url,
+                pool_size=1, max_overflow=0, pool_timeout=5,
+                connect_args={"sslmode": "require", "connect_timeout": 5}
+                    if "railway" in url or "postgres" in url else {"connect_timeout": 5}
+            )
+            with engine.connect() as conn:
+                # Crea tabella se non esiste
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS bot_config (
+                        key        VARCHAR(64) PRIMARY KEY,
+                        value      TEXT        NOT NULL,
+                        updated_at TIMESTAMP   NOT NULL DEFAULT NOW()
+                    )
+                """))
+                # Sanity check: se value non e' TEXT (es. CHAR(1) da errore Railway)
+                # la altera automaticamente
+                conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'bot_config'
+                              AND column_name = 'value'
+                              AND data_type != 'text'
+                        ) THEN
+                            ALTER TABLE bot_config ALTER COLUMN value TYPE TEXT;
+                        END IF;
+                    END $$;
+                """))
+                conn.commit()
+
+                rows = conn.execute(text("SELECT key, value FROM bot_config")).fetchall()
+                result = {}
+                for key, val in rows:
+                    if key in self._RUNTIME_FIELDS:
+                        result[key] = json.loads(val)
+            engine.dispose()
+            self._db_available = True
+            return result
+
+        except Exception as e:
+            self._db_available = False
+            return {}
+
+    def _save_to_db(self, updates: dict[str, Any]) -> bool:
+        """Salva/aggiorna config nel DB. Ritorna True se ok."""
+        try:
+            from sqlalchemy import create_engine, text
+            url = self._get_db_url()
+            if not url:
+                return False
+
+            engine = create_engine(
+                url,
+                pool_size=1, max_overflow=0, pool_timeout=5,
+                connect_args={"sslmode": "require", "connect_timeout": 5}
+                    if "railway" in url or "postgres" in url else {"connect_timeout": 5}
+            )
+            with engine.connect() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS bot_config (
+                        key        VARCHAR(64) PRIMARY KEY,
+                        value      TEXT        NOT NULL,
+                        updated_at TIMESTAMP   NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'bot_config'
+                              AND column_name = 'value'
+                              AND data_type != 'text'
+                        ) THEN
+                            ALTER TABLE bot_config ALTER COLUMN value TYPE TEXT;
+                        END IF;
+                    END $$;
+                """))
+                conn.commit()
+                for key, val in updates.items():
+                    if key in self._RUNTIME_FIELDS:
+                        conn.execute(text("""
+                            INSERT INTO bot_config (key, value, updated_at)
+                            VALUES (:k, :v, NOW())
+                            ON CONFLICT (key) DO UPDATE
+                              SET value = EXCLUDED.value,
+                                  updated_at = NOW()
+                        """), {"k": key, "v": json.dumps(val)})
+                conn.commit()
+            engine.dispose()
+            self._db_available = True
+            # Invalida la cache DB cosi viene riletta subito
+            self._db_cache_ts = 0.0
             return True
-        except Exception:
-            try:
-                conn.execute("ROLLBACK")
-            except Exception:
-                pass
+
+        except Exception as e:
+            self._db_available = False
             return False
 
-    def _db_read_all(self) -> dict:
-        """Legge tutte le chiavi da bot_config. Ritorna {} se fallisce."""
-        url = self._get_db_url()
-        if not url:
-            return self._file_read_all()
+    def _delete_from_db(self) -> bool:
+        """Cancella tutta la config dal DB (reset)."""
         try:
-            import psycopg2
-            conn = psycopg2.connect(url, connect_timeout=3)
-            self._ensure_table(conn)
-            cur = conn.cursor()
-            cur.execute("SELECT key, value FROM bot_config")
-            rows = cur.fetchall()
-            conn.close()
-            result = {}
-            for key, val in rows:
-                try:
-                    result[key] = json.loads(val)
-                except Exception:
-                    result[key] = val
-            self._db_ready = True
-            return result
-        except Exception as e:
-            # DB non raggiungibile → fallback su file
-            return self._file_read_all()
-
-    def _db_write_many(self, updates: dict) -> bool:
-        """Scrive/aggiorna piu' chiavi su bot_config. Ritorna True se ok."""
-        url = self._get_db_url()
-        if not url:
-            return self._file_write_many(updates)
-        try:
-            import psycopg2
-            conn = psycopg2.connect(url, connect_timeout=3)
-            self._ensure_table(conn)
-            cur = conn.cursor()
-            for key, val in updates.items():
-                cur.execute("""
-                    INSERT INTO bot_config (key, value, updated_at)
-                    VALUES (%s, %s, NOW())
-                    ON CONFLICT (key) DO UPDATE
-                        SET value = EXCLUDED.value,
-                            updated_at = NOW()
-                """, (key, json.dumps(val)))
-            conn.execute("COMMIT") if hasattr(conn, 'execute') else conn.commit()
-            conn.close()
-            # Invalida cache in-memory del file
-            self._cache_ts = 0.0
-            return True
-        except Exception as e:
-            return self._file_write_many(updates)
-
-    def _db_delete_all(self) -> bool:
-        """Cancella tutta la config da bot_config (reset)."""
-        url = self._get_db_url()
-        if not url:
-            return self._file_delete()
-        try:
-            import psycopg2
-            conn = psycopg2.connect(url, connect_timeout=3)
-            cur = conn.cursor()
-            cur.execute("DELETE FROM bot_config")
-            conn.commit()
-            conn.close()
+            from sqlalchemy import create_engine, text
+            url = self._get_db_url()
+            if not url:
+                return False
+            engine = create_engine(url, pool_size=1, max_overflow=0, pool_timeout=5,
+                connect_args={"sslmode": "require", "connect_timeout": 5}
+                    if "railway" in url or "postgres" in url else {"connect_timeout": 5})
+            with engine.connect() as conn:
+                # DROP + RECREATE per sicurezza (evita schema corrotto)
+                conn.execute(text("DROP TABLE IF EXISTS bot_config"))
+                conn.execute(text("""
+                    CREATE TABLE bot_config (
+                        key        VARCHAR(64) PRIMARY KEY,
+                        value      TEXT        NOT NULL,
+                        updated_at TIMESTAMP   NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.commit()
+            engine.dispose()
             self._db_cache = {}
-            self._cache_ts = 0.0
+            self._db_cache_ts = 0.0
             return True
         except Exception:
-            return self._file_delete()
+            return False
 
-    # --------------------------------------------------------------- file fallback
+    # ------------------------------------------------------------------ file fallback
 
-    def _file_read_all(self) -> dict:
+    def _try_load_from_file(self) -> dict:
         try:
             if os.path.exists(_FALLBACK_FILE):
                 with open(_FALLBACK_FILE) as f:
                     data = json.load(f)
-                return {k: v for k, v in data.items() if not k.startswith("_")}
+                return {k: v for k, v in data.items()
+                        if not k.startswith("_") and k in self._RUNTIME_FIELDS}
         except Exception:
             pass
         return {}
 
-    def _file_write_many(self, updates: dict) -> bool:
+    def _save_to_file(self, updates: dict[str, Any]):
         try:
-            existing = self._file_read_all()
+            existing = self._try_load_from_file()
             existing.update(updates)
+            existing["_updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             os.makedirs(os.path.dirname(_FALLBACK_FILE), exist_ok=True)
             with open(_FALLBACK_FILE, "w") as f:
                 json.dump(existing, f, indent=2)
-            return True
         except Exception:
-            return False
+            pass
 
-    def _file_delete(self) -> bool:
-        try:
-            if os.path.exists(_FALLBACK_FILE):
-                os.remove(_FALLBACK_FILE)
-            return True
-        except Exception:
-            return False
+    # ------------------------------------------------------------------ core refresh
 
-    # ------------------------------------------------------------------ core
-
-    def _refresh(self):
+    def _refresh_db(self):
         now = time.monotonic()
-        if now - self._cache_ts < self.REFRESH_INTERVAL:
+        if now - self._db_cache_ts < self.DB_REFRESH_INTERVAL:
             return
-        self._db_cache = self._db_read_all()
-        self._cache_ts = now
+        data = self._try_load_from_db()
+        if data is not None:
+            self._db_cache = data
+        self._db_cache_ts = now
+
+    def _refresh_file(self):
+        now = time.monotonic()
+        if now - self._file_cache_ts < self.FILE_REFRESH_INTERVAL:
+            return
+        self._file_cache = self._try_load_from_file()
+        self._file_cache_ts = now
+
+    # ------------------------------------------------------------------ get
 
     def _raw(self, key: str) -> Any:
-        # 1. Override in-memory (set_many / set)
+        # 1. Override in-memory (set/set_many, applicati subito)
         if key in self._mem:
             return self._mem[key]
-        # 2. DB / file (refresh ogni REFRESH_INTERVAL sec)
-        self._refresh()
+
+        # 2. PostgreSQL (persistente tra restart) - tentativo ogni 10s
+        self._refresh_db()
         if key in self._db_cache:
             return self._db_cache[key]
-        # 3. Env var Railway
+
+        # 3. File fallback (per sviluppo locale senza DB)
+        self._refresh_file()
+        if key in self._file_cache:
+            return self._file_cache[key]
+
+        # 4. Env var Railway
         env = os.getenv(key)
         if env is not None:
             return env
-        # 4. Default
+
+        # 5. Default hardcoded
         return self._DEFAULTS.get(key)
 
     def _cast(self, key: str, raw: Any) -> Any:
+        """
+        Cast al tipo corretto basandosi sul default hardcoded.
+        Gestisce: bool da JSON (True/False), numeri, stringhe.
+        """
         if raw is None:
             return self._DEFAULTS.get(key)
         default = self._DEFAULTS.get(key)
@@ -221,13 +286,23 @@ class DynamicSettings:
             return raw
         try:
             if isinstance(default, bool):
+                # json.loads ritorna gia' bool Python per true/false
                 if isinstance(raw, bool):
                     return raw
-                return str(raw).lower() in ("true", "1", "yes")
+                # stringa "true"/"false" da env var
+                if isinstance(raw, str):
+                    return raw.lower() in ("true", "1", "yes")
+                # numero 0/1
+                return bool(raw)
             if isinstance(default, int):
-                return int(float(raw))
+                # attenzione: bool e' sottoclasse di int in Python
+                if isinstance(raw, bool):
+                    return int(raw)
+                return int(float(str(raw)))
             if isinstance(default, float):
-                return float(raw)
+                return float(str(raw))
+            if isinstance(default, str):
+                return str(raw)
         except (ValueError, TypeError):
             pass
         return raw
@@ -240,38 +315,59 @@ class DynamicSettings:
             return self._cast(key, raw)
         raise AttributeError(f"settings has no attribute '{key}'")
 
-    # ----------------------------------------------------------------- public API
+    # ------------------------------------------------------------------ public API
 
     def set(self, key: str, value: Any):
-        """Override immediato in-memory + persiste su DB."""
-        casted = self._cast(key, value)
-        self._mem[key] = casted
-        self._db_write_many({key: casted})
+        """Override in-memory immediato."""
+        self._mem[key] = self._cast(key, value)
 
     def set_many(self, updates: dict[str, Any]) -> list[str]:
         """
-        Applica aggiornamenti a runtime.
-        1. Override immediato in-memory
-        2. Persiste su PostgreSQL (sopravvive al restart)
-        Ritorna lista dei campi cambiati.
+        Applica aggiornamenti dalla dashboard:
+        1. Salva SEMPRE su PostgreSQL (persistente tra restart)
+        2. Applica SEMPRE in-memory (stesso processo, immediato)
+        3. Invalida cache DB cosi la prossima lettura vede i nuovi valori
+        4. Fallback file se DB non disponibile
+
+        NON confronta old==new per decidere se salvare:
+        la dashboard manda sempre lo snapshot completo, dobbiamo
+        applicarlo tutto, anche se i valori sembrano uguali
+        (potrebbero essere diversi per tipo: float vs int, bool vs str).
         """
         changed = []
-        to_write = {}
+        to_save = {}
+
         for key, value in updates.items():
             if key not in self._RUNTIME_FIELDS:
                 continue
             new_val = self._cast(key, value)
-            old_val = self.get_current(key)
-            if old_val != new_val:
-                self._mem[key] = new_val
-                to_write[key] = new_val
-                changed.append(f"{key}: {old_val} -> {new_val}")
+            # Confronta con il valore PRECEDENTE in memoria (non dal DB)
+            # per costruire il log "changed", ma salva comunque tutto
+            old_mem = self._mem.get(key)
+            old_db  = self._db_cache.get(key)
+            old_shown = old_mem if old_mem is not None else old_db
+            if old_shown is None:
+                old_shown = self._DEFAULTS.get(key)
 
-        if to_write:
-            ok = self._db_write_many(to_write)
-            if not ok:
-                from loguru import logger
-                logger.warning("[CONFIG] Persistenza DB fallita — cambio solo in-memory per questo ciclo")
+            # Applica in-memory SEMPRE
+            self._mem[key] = new_val
+            to_save[key] = new_val
+
+            # Log solo se effettivamente diverso
+            if self._cast(key, old_shown) != new_val:
+                changed.append(f"{key}: {old_shown} -> {new_val}")
+
+        if to_save:
+            # Invalida cache DB prima di salvare
+            self._db_cache_ts = 0.0
+            ok = self._save_to_db(to_save)
+            if ok:
+                # Ricarica subito dal DB per conferma
+                self._db_cache = self._try_load_from_db()
+                self._db_cache_ts = time.monotonic()
+            else:
+                # Fallback file
+                self._save_to_file(to_save)
 
         return changed
 
@@ -282,17 +378,41 @@ class DynamicSettings:
             return None
 
     def reset_runtime(self):
-        """Cancella config dal DB e svuota override in-memory. Torna a env/default."""
+        """
+        Reset completo: cancella DB (bot_config), svuota memoria, cancella file.
+        Dopo il reset i valori tornano a Railway Variables / default hardcoded.
+        """
+        # 1. Svuota memoria in-process
         self._mem.clear()
         self._db_cache.clear()
-        self._cache_ts = 0.0
-        self._db_delete_all()
+        self._db_cache_ts = 0.0
+        self._file_cache.clear()
+        self._file_cache_ts = 0.0
+
+        # 2. Cancella dal DB (DROP + RECREATE tabella vuota)
+        self._delete_from_db()
+
+        # 3. Cancella file fallback
+        try:
+            if os.path.exists(_FALLBACK_FILE):
+                os.remove(_FALLBACK_FILE)
+        except Exception:
+            pass
 
     def as_dict(self) -> dict:
-        self._refresh()
         return {k: self.get_current(k) for k in self._RUNTIME_FIELDS}
 
-    # ---------------------------------------------------------- campi fissi (solo env)
+    def storage_backend(self) -> str:
+        """Ritorna quale backend sta usando: 'postgresql', 'file', 'memory_only'"""
+        if self._db_available is True:
+            return "postgresql"
+        if self._db_available is False:
+            return "file" if os.path.exists(_FALLBACK_FILE) else "memory_only"
+        # Non ancora testato - prova
+        self._refresh_db()
+        return self.storage_backend()
+
+    # ------------------------------------------------------------------ campi fissi
 
     @property
     def BITGET_API_KEY(self)        -> str:  return os.getenv("BITGET_API_KEY", "")
@@ -308,15 +428,12 @@ class DynamicSettings:
     @property
     def MARKET_TYPES(self)  -> list:
         return [s.strip() for s in os.getenv("MARKET_TYPES", "spot,futures").split(",") if s.strip()]
-
     @property
     def SPOT_SYMBOLS(self) -> list:
         return [s.strip() for s in os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").split(",") if s.strip()]
-
     @property
     def FUTURES_SYMBOLS(self) -> list:
         return [s.strip() for s in os.getenv("FUTURES_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT").split(",") if s.strip()]
-
     @property
     def SCALPING_SYMBOLS(self) -> list:
         return [s.strip() for s in os.getenv("SCALPING_SYMBOLS", "BTC/USDT").split(",") if s.strip()]
