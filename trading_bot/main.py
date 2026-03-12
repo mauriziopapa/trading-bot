@@ -11,6 +11,14 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from trading_bot.config import settings
+
+def _cfg_float(key: str, default: float) -> float:
+    try:
+        val = settings.as_dict().get(key)
+        return float(val) if val is not None else default
+    except (TypeError, ValueError):
+        return default
+
 from trading_bot.utils.exchange import BitgetExchange
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.utils.notifier import TelegramNotifier
@@ -173,7 +181,7 @@ class TradingBot:
         if settings.ENABLE_SCALPING:
             schedule.every(1).minutes.do(self._scan_scalping)
 
-        schedule.every(15).minutes.do(self._scan_emerging)
+        schedule.every(5).minutes.do(self._scan_emerging)   # era 15m — emerging veloci
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(1).hours.do(self._health_check)
         schedule.every(15).minutes.do(lambda: self._sentiment.get_sentiment(force=True))
@@ -256,37 +264,85 @@ class TradingBot:
                     logger.error(f"[scan_scalping] {symbol} {market}: {e}")
 
     def _scan_emerging(self):
+        """Scansione coin emergenti con due modalità di ingresso:
+        1. DIRETTO (score ≥ 65): ordine market buy immediato, risk 1.5×
+        2. CONFERMATO (score < 65): aspetta conferma RSI/Bollinger come prima
+        """
+        coins = self._emerging.scan()
+        if not coins:
+            logger.info("[EMERGING SCAN] Nessuna coin emergente trovata")
+            return
+
+        logger.info(f"[EMERGING SCAN] {len(coins)} coin — analisi ordini diretti + confermati...")
         swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
-        if not swing_strategies:
-            return
 
-        emerging_symbols = self._emerging.get_spot_symbols()
-        if not emerging_symbols:
-            return
+        # Moltiplicatore di rischio per emerging (dal DB, default 1.5x)
+        em_risk_mult = float(_cfg_float("EMERGING_RISK_MULT", 1.5))
+        em_direct_score = float(_cfg_float("EMERGING_DIRECT_SCORE", 65.0))
 
-        logger.info(f"[EMERGING SCAN] Analisi {len(emerging_symbols)} coin emergenti...")
-        for symbol in emerging_symbols:
+        for coin in coins:
+            symbol  = f"{coin['symbol']}/USDT"
+            score   = coin.get("score", 0)
+            chg24   = coin.get("price_change_24h", 0)
+            sources = coin.get("sources", [])
+            is_new  = coin.get("is_new_listing", False)
+
             try:
                 df = ohlcv_to_df(
                     self.exchange.fetch_ohlcv(symbol, settings.TF_SWING, 100, "spot")
                 )
-                if len(df) < 50:
+                if len(df) < 20:
+                    logger.info(f"[EMERGING] {symbol} candele insufficienti ({len(df)})")
                     continue
 
-                for strategy in swing_strategies:
-                    signal = strategy.analyze(df, symbol, "spot")
-                    if signal:
-                        modifier = self._sentiment.confidence_modifier(signal.side)
-                        signal.confidence = min(100, signal.confidence * modifier)
-                        signal.notes += f" | emerging_boost={modifier:.1f}x"
-                        logger.info(f"[EMERGING] Segnale su {symbol} conf={signal.confidence:.0f}%")
-                        self._process_signal(signal)
+                close = float(df["close"].iloc[-1])
+                atr   = float(df["close"].diff().abs().rolling(14).mean().iloc[-1] or close * 0.02)
+
+                # ── MODALITÀ 1: ORDINE DIRETTO se score alto ─────────────────
+                if score >= em_direct_score:
+                    sl_dist = atr * 2.0   # SL più largo per volatilità emerging
+                    stop_loss   = round(close - sl_dist, 6)
+                    take_profit = round(close + sl_dist * settings.TAKE_PROFIT_RATIO, 6)
+
+                    sig = Signal(
+                        strategy    = "EMERGING_DIRECT",
+                        symbol      = symbol,
+                        market      = "spot",
+                        side        = "buy",
+                        confidence  = min(score, 95.0),
+                        entry       = close,
+                        stop_loss   = stop_loss,
+                        take_profit = take_profit,
+                        atr         = atr,
+                        timeframe   = settings.TF_SWING,
+                        notes       = f"score={score:.0f} chg={chg24:+.1f}% src={','.join(sources)}"
+                                      + (" [NEW LISTING]" if is_new else ""),
+                    )
+                    logger.info(
+                        f"[EMERGING DIRECT] {symbol} score={score:.0f} chg={chg24:+.1f}% "
+                        f"src={sources} → ordine diretto (risk {em_risk_mult:.1f}×)"
+                    )
+                    self._process_signal(sig, risk_multiplier=em_risk_mult)
+
+                # ── MODALITÀ 2: CONFERMATO da strategia ──────────────────────
+                else:
+                    for strategy in swing_strategies:
+                        signal = strategy.analyze(df, symbol, "spot")
+                        if signal:
+                            signal.confidence = min(100, signal.confidence * 1.2)  # boost +20%
+                            signal.notes += f" | emerging score={score:.0f} chg={chg24:+.1f}%"
+                            logger.info(
+                                f"[EMERGING CONF] {symbol} {signal.side.upper()} "
+                                f"conf={signal.confidence:.0f}% score={score:.0f}"
+                            )
+                            self._process_signal(signal, risk_multiplier=em_risk_mult * 0.8)
+
             except Exception as e:
                 logger.debug(f"[EMERGING SCAN] {symbol}: {e}")
 
     # ── Signal Processing ─────────────────────────────────────────────────────
 
-    def _process_signal(self, signal: Signal):
+    def _process_signal(self, signal: Signal, risk_multiplier: float = 1.0):
         ok, reason = self.risk.can_trade_symbol(signal.symbol, signal.market)
         if not ok:
             logger.info(f"[SKIP-RISK] {signal.symbol} {signal.market}: {reason}")
@@ -320,11 +376,12 @@ class TradingBot:
             return
 
         size = self.risk.position_size(
-            balance   = balance,
-            entry     = signal.entry,
-            stop_loss = signal.stop_loss,
-            atr       = signal.atr,
-            market    = signal.market,
+            balance          = balance,
+            entry            = signal.entry,
+            stop_loss        = signal.stop_loss,
+            atr              = signal.atr,
+            market           = signal.market,
+            risk_multiplier  = risk_multiplier,
         )
 
         # Size = 0.0 → risk_manager ha trovato notionale troppo basso
