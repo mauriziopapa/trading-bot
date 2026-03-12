@@ -104,12 +104,22 @@ class TelegramNotifier:
     def circuit_breaker(self, reason: str):
         self.send(f"🚨 <b>CIRCUIT BREAKER ATTIVATO</b>\n{reason}\nBot in pausa fino a reset giornaliero.")
 
-    def startup(self, mode: str, symbols_spot: list, symbols_futures: list):
+    def startup(self, mode: str, symbols_spot: list, symbols_futures: list,
+                bal_spot: float = 0.0, bal_futures: float = 0.0):
+        from trading_bot.config import settings
+        live_extra = ""
+        if mode == "live":
+            live_extra = (
+                f"\n💰 Spot: <b>{bal_spot:.2f} USDT</b> | Fut: <b>{bal_futures:.2f} USDT</b>"
+                f"\n⚡ Risk: <b>{settings.MAX_RISK_PCT}%</b>/trade | Leva: <b>{settings.DEFAULT_LEVERAGE}x</b>"
+                f"\n🛡 Stop giorn: <b>{settings.MAX_DAILY_LOSS_PCT}%</b> | DD max: <b>{settings.MAX_DRAWDOWN_PCT}%</b>"
+            )
         self.send(
             f"🚀 <b>BOT AVVIATO</b>\n"
             f"Modalita: <b>{'🔴 LIVE' if mode=='live' else '🟡 PAPER'}</b>\n"
             f"Spot:    {', '.join(symbols_spot)}\n"
-            f"Futures: {', '.join(symbols_futures)}\n"
+            f"Futures: {', '.join(symbols_futures)}"
+            f"{live_extra}\n"
             f"⏰ {_now()}"
         )
 
