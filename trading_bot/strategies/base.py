@@ -37,12 +37,20 @@ class Signal:
 class BaseStrategy:
     NAME = "base"
     MIN_CANDLES = 50
-    MIN_CONFIDENCE = 55.0    # soglia minima per generare segnale
+
+    @property
+    def MIN_CONFIDENCE(self) -> float:
+        """Legge sempre dal DB tramite settings — mai hardcoded."""
+        try:
+            from trading_bot.config import settings
+            return float(settings.MIN_CONFIDENCE)
+        except Exception:
+            return 65.0   # fallback solo se settings non importabile
 
     def analyze(self, df: pd.DataFrame, symbol: str, market: str) -> Optional[Signal]:
         """Override nelle sottoclassi. Ritorna Signal o None."""
         raise NotImplementedError
 
     def _atr_value(self, df: pd.DataFrame) -> float:
-        from trading_bot.utils.indicators import atr
+        from utils.indicators import atr
         return float(atr(df["high"], df["low"], df["close"]).iloc[-1])

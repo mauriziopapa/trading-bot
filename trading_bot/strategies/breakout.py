@@ -14,9 +14,9 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from trading_bot.strategies.base import BaseStrategy, Signal
-from trading_bot.utils import indicators as ind
-from trading_bot.config import settings
+from strategies.base import BaseStrategy, Signal
+from utils import indicators as ind
+from config import settings
 
 
 class BreakoutStrategy(BaseStrategy):
@@ -68,7 +68,7 @@ class BreakoutStrategy(BaseStrategy):
             and vol_r >= self.vol_multiplier                # volume spike
             and atr_expanding):                             # ATR in espansione
             side = "buy"
-            confidence = 65.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append(f"breakout {range_high:.4f} (lookback {self.lookback})")
             notes_list.append(f"volume {vol_r:.1f}x avg")
 
@@ -92,7 +92,7 @@ class BreakoutStrategy(BaseStrategy):
               and vol_r >= self.vol_multiplier
               and atr_expanding):
             side = "sell"
-            confidence = 65.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append(f"breakout sotto {range_low:.4f}")
             notes_list.append(f"volume {vol_r:.1f}x avg")
 

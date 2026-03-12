@@ -11,9 +11,9 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from trading_bot.strategies.base import BaseStrategy, Signal
-from trading_bot.utils import indicators as ind
-from trading_bot.config import settings
+from strategies.base import BaseStrategy, Signal
+from utils import indicators as ind
+from config import settings
 
 
 class ScalpingStrategy(BaseStrategy):
@@ -78,7 +78,7 @@ class ScalpingStrategy(BaseStrategy):
             and k_now > self.stoch_oversold           # stoch sale
             and k_now > d_now):                       # K > D
             side = "buy"
-            confidence = 62.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append("EMA9 cross EMA21 bullish")
             notes_list.append(f"Stoch K={k_now:.1f} risale")
 
@@ -99,7 +99,7 @@ class ScalpingStrategy(BaseStrategy):
               and k_now < self.stoch_overbought
               and k_now < d_now):
             side = "sell"
-            confidence = 62.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append("EMA9 cross EMA21 bearish")
             notes_list.append(f"Stoch K={k_now:.1f} scende")
 

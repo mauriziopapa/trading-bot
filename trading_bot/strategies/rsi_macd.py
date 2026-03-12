@@ -11,10 +11,10 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from trading_bot.strategies.base import BaseStrategy, Signal
-from trading_bot.utils import indicators as ind
-from trading_bot.utils.risk_manager import RiskManager
-from trading_bot.config import settings
+from strategies.base import BaseStrategy, Signal
+from utils import indicators as ind
+from utils.risk_manager import RiskManager
+from config import settings
 
 
 class RSIMACDStrategy(BaseStrategy):
@@ -66,7 +66,7 @@ class RSIMACDStrategy(BaseStrategy):
         if (rsi_p < self.rsi_oversold and rsi > self.rsi_exit_long   # RSI risale
             and macd_prev < sig_prev and macd_now > sig_now):         # crossover bullish
             side = "buy"
-            confidence = 60.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
 
             if last > e200:         # trend principale rialzista
                 confidence += 10
@@ -85,7 +85,7 @@ class RSIMACDStrategy(BaseStrategy):
         elif (rsi_p > self.rsi_overbought and rsi < self.rsi_exit_short
               and macd_prev > sig_prev and macd_now < sig_now):        # crossover bearish
             side = "sell"
-            confidence = 60.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
 
             if last < e200:
                 confidence += 10

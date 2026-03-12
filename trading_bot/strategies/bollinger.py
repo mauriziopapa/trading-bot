@@ -11,9 +11,9 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from trading_bot.strategies.base import BaseStrategy, Signal
-from trading_bot.utils import indicators as ind
-from trading_bot.config import settings
+from strategies.base import BaseStrategy, Signal
+from utils import indicators as ind
+from config import settings
 
 
 class BollingerStrategy(BaseStrategy):
@@ -71,7 +71,7 @@ class BollingerStrategy(BaseStrategy):
             and last_close > prev_close             # candela di rimbalzo
             and rsi < self.rsi_oversold):
             side = "buy"
-            confidence = 62.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append(f"rimbalzo BB lower (bw={bandwidth_pct:.1f}%)")
 
             if rsi < 30:
@@ -89,7 +89,7 @@ class BollingerStrategy(BaseStrategy):
               and last_close < prev_close
               and rsi > self.rsi_overbought):
             side = "sell"
-            confidence = 62.0
+            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
             notes_list.append(f"rejection BB upper (bw={bandwidth_pct:.1f}%)")
 
             if rsi > 70:
