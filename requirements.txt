@@ -1,6 +1,5 @@
 aiohttp==3.9.1
 ccxt==4.2.89
-starknet-py==0.18.1
 fastapi==0.111.0
 loguru==0.7.2
 numpy==2.2.6
