@@ -298,7 +298,7 @@ class TradingBot:
         except Exception:
             pass   # sentiment non blocca mai il bot
 
-        min_conf = 65 if settings.IS_LIVE else 55
+        min_conf = settings.MIN_CONFIDENCE   # dal DB (bot_config)
         if signal.confidence < min_conf:
             logger.debug(f"[SKIP] {signal.symbol} conf={signal.confidence:.0f}% < {min_conf}%")
             return
