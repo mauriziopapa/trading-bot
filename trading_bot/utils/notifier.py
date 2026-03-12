@@ -3,44 +3,40 @@ Telegram Notifier
 Invia alert per trade aperti/chiusi, errori critici e report giornaliero.
 """
 
-import asyncio
+import requests as _requests
 from datetime import datetime, timezone
 from loguru import logger
-
-try:
-    from telegram import Bot
-    from telegram.error import TelegramError
-    TELEGRAM_AVAILABLE = True
-except ImportError:
-    TELEGRAM_AVAILABLE = False
 
 from trading_bot.config import settings
 
 
 class TelegramNotifier:
+    """Notifier HTTP puro — niente asyncio, niente event loop, zero crash."""
+
+    _BASE = "https://api.telegram.org/bot{token}/sendMessage"
 
     def __init__(self):
         self.enabled = (
-            TELEGRAM_AVAILABLE
-            and bool(settings.TELEGRAM_TOKEN)
+            bool(settings.TELEGRAM_TOKEN)
             and bool(settings.TELEGRAM_CHAT_ID)
         )
-        self.bot = Bot(token=settings.TELEGRAM_TOKEN) if self.enabled else None
-
         if self.enabled:
-            logger.info("Telegram notifier attivo")
+            logger.info("Telegram notifier attivo (HTTP diretto)")
         else:
             logger.warning("Telegram notifier disabilitato (token/chat_id mancanti)")
 
     def send(self, text: str):
         if not self.enabled:
             return
+        url = self._BASE.format(token=settings.TELEGRAM_TOKEN)
         try:
-            asyncio.run(self.bot.send_message(
-                chat_id=settings.TELEGRAM_CHAT_ID,
-                text=text,
-                parse_mode="HTML"
-            ))
+            resp = _requests.post(
+                url,
+                json={"chat_id": settings.TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if not resp.ok:
+                logger.warning(f"Telegram HTTP {resp.status_code}: {resp.text[:120]}")
         except Exception as e:
             logger.warning(f"Telegram send error: {e}")
 
