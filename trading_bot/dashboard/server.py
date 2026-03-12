@@ -24,32 +24,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── File paths ───────────────────────────────────────────────────────────────
-
-_DIR        = os.path.dirname(__file__)
-STATE_FILE  = os.path.join(_DIR, "dashboard_state.json")
-CONFIG_FILE = os.path.join(_DIR, "runtime_config.json")
-HTML_FILE   = os.path.join(_DIR, "dashboard.html")
+_DIR       = os.path.dirname(__file__)
+STATE_FILE = os.path.join(_DIR, "dashboard_state.json")
+HTML_FILE  = os.path.join(_DIR, "dashboard.html")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# CONFIG MODEL — Pydantic valida ogni campo prima di salvarlo
+# CONFIG MODEL
 # ════════════════════════════════════════════════════════════════════════════
 
 class ConfigPayload(BaseModel):
-    # Risk
     MAX_RISK_PCT:           float = Field(3.5,  ge=0.5,  le=10.0)
     DEFAULT_LEVERAGE:       int   = Field(5,    ge=1,    le=20)
     MAX_DAILY_LOSS_PCT:     float = Field(8.0,  ge=1.0,  le=30.0)
     MAX_DRAWDOWN_PCT:       float = Field(15.0, ge=5.0,  le=50.0)
     TAKE_PROFIT_RATIO:      float = Field(2.5,  ge=1.0,  le=5.0)
     TRAILING_STOP_PCT:      float = Field(1.2,  ge=0.1,  le=5.0)
-    # Positions
     MIN_CONFIDENCE:         float = Field(65.0, ge=40.0, le=95.0)
     MAX_POSITIONS_SPOT:     int   = Field(4,    ge=1,    le=10)
     MAX_POSITIONS_FUTURES:  int   = Field(3,    ge=1,    le=10)
     MARGIN_MODE:            str   = Field("isolated")
-    # Strategies on/off
     ENABLE_RSI_MACD:        bool  = True
     ENABLE_BOLLINGER:       bool  = True
     ENABLE_BREAKOUT:        bool  = True
@@ -63,16 +57,12 @@ class ConfigPayload(BaseModel):
         return v
 
     class Config:
-        extra = "ignore"   # ignora campi extra dalla dashboard
+        extra = "ignore"
 
 
 # ── Config I/O — SEMPRE DAL DB tramite settings ───────────────────────────────
 
 def _read_config() -> dict:
-    """
-    Legge la config corrente DAL DB tramite settings.as_dict().
-    Niente file, niente Pydantic defaults — solo bot_config.
-    """
     try:
         from trading_bot.config import settings as S
         data = S.as_dict()
@@ -81,24 +71,14 @@ def _read_config() -> dict:
             return data
     except Exception as e:
         logger.warning(f"[CONFIG] settings.as_dict() fallito: {e}")
-    # Fallback minimo solo se settings non e' importabile (primo avvio)
     return ConfigPayload().dict()
 
 
 def _write_config(cfg: dict) -> None:
-    """Non scrive piu' file — il salvataggio avviene in set_many() sul DB."""
-    pass   # mantenuto per compatibilita' con chiamate esistenti
+    pass   # no-op: salvataggio avviene in set_many() sul DB
 
 
 def _apply_to_settings(cfg: dict) -> list[str]:
-    """
-    Applica la config al singleton DynamicSettings.
-    set_many() fa:
-      1. Override in-memory immediato (stesso processo)
-      2. Salva su PostgreSQL  -> PERSISTE tra restart Railway
-      3. Fallback file se DB non disponibile
-    Funziona sia con processi unificati che separati.
-    """
     try:
         from trading_bot.config import settings as S
         changed = S.set_many(cfg)
@@ -122,7 +102,7 @@ def _read_state() -> dict:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE) as f:
                 data = json.load(f)
-            data["config"] = _read_config()   # inietta config nello state
+            data["config"] = _read_config()
             return data
     except Exception:
         pass
@@ -198,85 +178,43 @@ async def dashboard():
         return "<h1>dashboard.html non trovato</h1>"
 
 
-# ── State ─────────────────────────────────────────────────────────────────────
-
 @app.get("/api/state")
 async def get_state():
     return _read_state()
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
-
 @app.get("/api/config")
 async def get_config():
-    """Ritorna la configurazione runtime corrente dal DB."""
     return _read_config()
 
 
 @app.post("/api/config")
 async def update_config(payload: ConfigPayload):
-    """
-    Aggiorna la configurazione del bot a runtime.
-
-    Flusso:
-      1. Pydantic valida tutti i campi (tipi, range, enum)
-      2. Salva su PostgreSQL bot_config (persistente tra restart)
-      3. Tenta apply diretto a settings (solo se stesso processo)
-      4. Notifica tutti i client WS con tipo 'config_updated'
-      5. Ritorna { ok, saved, applied_live, changed[], message }
-
-    applied_live=True  → cambio immediato, nessun restart necessario
-    applied_live=False → cambio al prossimo restart del bot
-    """
     cfg = payload.dict()
-
-    # Salva su DB e applica live (set_many fa tutto in uno)
     changed = _apply_to_settings(cfg)
-    applied_live = True   # set_many aggiorna sempre la cache locale
+    applied_live = True
 
-    # 3. Notifica WebSocket
     await manager.broadcast({
         "type": "config_updated",
-        "data": {
-            "config":       cfg,
-            "changed":      changed,
-            "applied_live": applied_live,
-        }
+        "data": {"config": cfg, "changed": changed, "applied_live": applied_live}
     })
 
-    # 4. Messaggio risposta
     if applied_live:
         msg = f"✅ Configurazione applicata live ({len(changed)} campi modificati). Nessun restart necessario."
     else:
-        msg = "💾 Configurazione salvata su file. Verrà applicata al prossimo avvio del bot."
+        msg = "💾 Configurazione salvata su file. Verrà applicata al prossimo avvio."
 
     logger.info(f"[CONFIG] {msg}")
+    return {"ok": True, "saved": True, "applied_live": applied_live,
+            "changed": changed, "config": cfg, "message": msg}
 
-    return {
-        "ok":           True,
-        "saved":        True,
-        "applied_live": applied_live,
-        "changed":      changed,
-        "config":       cfg,
-        "message":      msg,
-    }
-
-
-# ── Accessori ─────────────────────────────────────────────────────────────────
 
 @app.delete("/api/config")
 async def reset_config():
-    """
-    Reset completo:
-    - Cancella la tabella bot_config dal PostgreSQL
-    - Svuota override in-memory
-    - Cancella file fallback
-    Torna ai valori Railway Variables / default hardcoded.
-    """
     try:
         from trading_bot.config import settings as S
         S.reset_runtime()
-        logger.info("[CONFIG] reset_runtime() OK — DB + file + memory svuotati")
+        logger.info("[CONFIG] reset_runtime() OK — DB + memory svuotati")
     except Exception as e:
         logger.warning(f"[CONFIG] reset_runtime parziale: {e}")
 
@@ -285,21 +223,11 @@ async def reset_config():
         "type": "config_updated",
         "data": {"config": defaults, "changed": ["RESET"], "applied_live": True}
     })
-
     return {"ok": True, "message": "Config resettata — Railway Variables / default attivi", "config": defaults}
 
 
 @app.post("/api/restart")
 async def restart_bot():
-    """
-    Riavvia il processo corrente tramite os.execv (self-exec).
-    Funziona sia su Railway che in locale:
-    - os.execv sostituisce il processo corrente col lo stesso comando
-    - Railway/Procfile vedono il nuovo processo e lo gestisce normalmente
-    - La dashboard WebSocket si disconnette e il client fa polling fino al ritorno
-
-    Nessun bisogno di SIGTERM o redeploy: il processo si riavvia da solo.
-    """
     import sys
     import threading
 
@@ -312,36 +240,24 @@ async def restart_bot():
 
     def _do_restart():
         import time, os, sys
-        time.sleep(1.5)   # tempo per consegnare il messaggio WS
+        time.sleep(1.5)
         try:
-            # Prova shutdown graceful del bot (stesso processo)
             try:
                 import importlib
                 main_mod = importlib.import_module("trading_bot.main")
                 if hasattr(main_mod, "_bot_ref") and main_mod._bot_ref:
                     main_mod._bot_ref._running = False
-                    logger.info("[RESTART] _running=False — attendo stop bot...")
                     time.sleep(4)
             except Exception:
                 pass
-
-            # os.execv: rimpiazza questo processo con se stesso
-            # argv viene ricostruito identico -> Railway non si accorge di nulla
             logger.warning(f"[RESTART] os.execv({sys.executable}, {sys.argv})")
             os.execv(sys.executable, [sys.executable] + sys.argv)
-
         except Exception as e:
-            logger.error(f"[RESTART] execv fallito: {e} — tento sys.exit(1) per Railway restart")
-            import sys as _sys
-            _sys.exit(1)   # Railway restart automatico su exit != 0
+            logger.error(f"[RESTART] execv fallito: {e} — sys.exit(1)")
+            sys.exit(1)
 
     threading.Thread(target=_do_restart, daemon=False).start()
-
-    return {
-        "ok":      True,
-        "message": "Riavvio avviato — riconnessione automatica entro 20s",
-        "eta_sec": 20,
-    }
+    return {"ok": True, "message": "Riavvio avviato — riconnessione automatica entro 20s", "eta_sec": 20}
 
 
 @app.get("/api/sentiment")
@@ -359,8 +275,10 @@ async def health():
     info = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
     try:
         from trading_bot.config import settings as S
-        info["storage"] = S.storage_backend()
-        info["config_keys"] = list(S._db_cache.keys()) or list(S._file_cache.keys())
+        info["storage"]     = S.storage_backend()
+        # FIX #3: _db_cache e _file_cache non esistono — il dict si chiama _cache
+        info["config_keys"] = list(S._cache.keys())
+        info["db_ok"]       = S._db_ok
     except Exception:
         pass
     return info
