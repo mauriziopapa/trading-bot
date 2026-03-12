@@ -22,6 +22,13 @@ class SentimentAnalyzer:
     """
     Analizzatore di sentiment multi-fonte.
     Usato come filtro aggiuntivo per validare i segnali delle strategie.
+
+    Parametri configurabili dal DB (bot_config):
+      SENTIMENT_BYPASS     (bool)  — se True salta il filtro sentiment (utile per test)
+      FEAR_GREED_LONG_MIN  (float) — Fear & Greed minimo per aprire LONG  (default 0)
+      FEAR_GREED_LONG_MAX  (float) — Fear & Greed massimo per aprire LONG  (default 80)
+      FEAR_GREED_SHORT_MIN (float) — Fear & Greed minimo per aprire SHORT (default 20)
+      FEAR_GREED_SHORT_MAX (float) — Fear & Greed massimo per aprire SHORT (default 100)
     """
 
     def __init__(self):
@@ -59,26 +66,66 @@ class SentimentAnalyzer:
         return result
 
     def should_trade_long(self, symbol: str = "BTC") -> tuple[bool, str]:
-        """Ritorna True se il sentiment supporta posizioni LONG."""
+        """
+        Ritorna True se il sentiment supporta posizioni LONG.
+        Legge soglie dal DB (bot_config) — configurabili in runtime dalla dashboard.
+        """
+        # SENTIMENT_BYPASS: se True salta completamente il filtro (utile per test)
+        try:
+            if getattr(settings, "SENTIMENT_BYPASS", False):
+                return True, "Sentiment bypass attivo — filtro disabilitato"
+        except Exception:
+            pass
+
         s = self.get_sentiment()
         score = s["score"]
+        fg    = s.get("fear_greed", score)   # usa Fear & Greed raw se disponibile
 
+        # Leggi soglie dal DB con fallback ai default storici
+        try:
+            fg_min = float(getattr(settings, "FEAR_GREED_LONG_MIN",  0))
+            fg_max = float(getattr(settings, "FEAR_GREED_LONG_MAX",  80))
+        except Exception:
+            fg_min, fg_max = 0, 80
+
+        if fg < fg_min:
+            return False, f"Fear & Greed {fg} < {fg_min} (min LONG) → troppo fearful"
+        if fg > fg_max:
+            return False, f"Fear & Greed {fg} > {fg_max} (max LONG) → Extreme Greed, evita LONG"
         if score < 20:
             return True, f"Extreme Fear ({score}) → contrarian LONG favorito"
-        if score > 80:
-            return False, f"Extreme Greed ({score}) → evita nuovi LONG"
-        return True, f"Sentiment neutro ({score})"
+        return True, f"Sentiment OK ({score}) — F&G={fg} in range [{fg_min}, {fg_max}]"
 
     def should_trade_short(self, symbol: str = "BTC") -> tuple[bool, str]:
-        """Ritorna True se il sentiment supporta posizioni SHORT."""
+        """
+        Ritorna True se il sentiment supporta posizioni SHORT.
+        Legge soglie dal DB (bot_config) — configurabili in runtime dalla dashboard.
+        """
+        # SENTIMENT_BYPASS: se True salta completamente il filtro
+        try:
+            if getattr(settings, "SENTIMENT_BYPASS", False):
+                return True, "Sentiment bypass attivo — filtro disabilitato"
+        except Exception:
+            pass
+
         s = self.get_sentiment()
         score = s["score"]
+        fg    = s.get("fear_greed", score)
 
+        # Leggi soglie dal DB con fallback ai default storici
+        try:
+            fg_min = float(getattr(settings, "FEAR_GREED_SHORT_MIN", 20))
+            fg_max = float(getattr(settings, "FEAR_GREED_SHORT_MAX", 100))
+        except Exception:
+            fg_min, fg_max = 20, 100
+
+        if fg < fg_min:
+            return False, f"Fear & Greed {fg} < {fg_min} (min SHORT) → troppo fearful per short"
+        if fg > fg_max:
+            return False, f"Fear & Greed {fg} > {fg_max} → fuori range SHORT"
         if score > 80:
             return True, f"Extreme Greed ({score}) → contrarian SHORT favorito"
-        if score < 20:
-            return False, f"Extreme Fear ({score}) → evita nuovi SHORT"
-        return True, f"Sentiment neutro ({score})"
+        return True, f"Sentiment OK ({score}) — F&G={fg} in range [{fg_min}, {fg_max}]"
 
     def confidence_modifier(self, signal_side: str) -> float:
         """
