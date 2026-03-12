@@ -72,7 +72,8 @@ class RiskManager:
     # ─── Position Sizing ─────────────────────────────────────────────────────
 
     def position_size(self, balance: float, entry: float, stop_loss: float,
-                      atr: float = None, market: str = "spot") -> float:
+                      atr: float = None, market: str = "spot",
+                      risk_multiplier: float = 1.0) -> float:
         """
         Calcola la size ottimale del trade.
         - Base: rischio fisso (MAX_RISK_PCT % del balance)
@@ -83,7 +84,8 @@ class RiskManager:
 
         # Modifier Kelly parziale (metà Kelly per sicurezza)
         kelly_mod = self._half_kelly()
-        risk_pct  = risk_pct * kelly_mod
+        risk_pct  = risk_pct * kelly_mod * risk_multiplier
+        risk_pct  = min(risk_pct, 0.08)   # cap assoluto 8% anche con emerging boost
 
         # Modifier volatilità ATR
         if atr is not None and entry > 0:

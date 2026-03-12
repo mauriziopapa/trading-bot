@@ -113,9 +113,9 @@ class EmergingScanner:
             return self._last_scan
 
         # Leggi parametri runtime dal DB
-        min_vol     = _cfg("EM_MIN_VOLUME_USD",   5_000_000.0)
-        min_chg     = _cfg("EM_MIN_CHANGE_24H",   5.0)
-        min_surge   = _cfg("EM_MIN_VOLUME_SURGE", 2.0)
+        min_vol     = _cfg("EM_MIN_VOLUME_USD",   1_000_000.0)   # era 5M
+        min_chg     = _cfg("EM_MIN_CHANGE_24H",   2.0)           # era 5.0
+        min_surge   = _cfg("EM_MIN_VOLUME_SURGE", 1.2)           # era 2.0
         max_mcap    = _cfg("EM_MAX_MARKET_CAP",   2_000_000_000.0)
         min_mcap    = _cfg("EM_MIN_MARKET_CAP",   0.0)
         max_results = int(_cfg("EM_MAX_RESULTS",  10))
@@ -142,6 +142,9 @@ class EmergingScanner:
             self._merge(raw, coin)
 
         for coin in self._fetch_volume_spikes(min_vol):
+            self._merge(raw, coin)
+
+        for coin in self._fetch_bitget_movers(max(min_chg * 0.5, 1.5)):
             self._merge(raw, coin)
 
         # ── Filtra e calcola score finale ────────────────────────────────
@@ -370,6 +373,51 @@ class EmergingScanner:
             logger.debug(f"[EMERGING] Volume spikes: {e}")
             return []
 
+    def _fetch_bitget_movers(self, min_chg: float) -> list[dict]:
+        """⑥ Bitget tickers — coin con cambio 24h positivo e volume > 500K.
+        Più permissivo di _fetch_bitget_gainers: cattura i movimenti in corso.
+        """
+        try:
+            r = requests.get(f"{BITGET_BASE}/spot/market/tickers",
+                             headers=_HEADERS, timeout=10)
+            if r.status_code != 200:
+                return []
+            out = []
+            for t in r.json().get("data", []):
+                if not t.get("symbol", "").endswith("USDT"):
+                    continue
+                vol  = float(t.get("usdtVol",      0) or 0)
+                chg  = float(t.get("changeUtc24h", 0) or 0) * 100
+                last = float(t.get("lastPr",       0) or 0)
+                if vol < 500_000 or last <= 0:
+                    continue
+                if chg < min_chg:
+                    continue
+                sym  = t.get("symbol", "").replace("USDT", "").strip().upper()
+                high = float(t.get("high24h", last) or last)
+                # Distanza dal massimo 24h: se siamo ancora vicini al top → forza
+                proximity_to_high = last / high if high > 0 else 0
+                out.append({
+                    "symbol":           sym,
+                    "name":             sym,
+                    "price":            last,
+                    "price_change_24h": round(chg, 2),
+                    "volume_24h_usd":   vol,
+                    "market_cap_usd":   0.0,
+                    "volume_surge":     self._est_surge(vol),
+                    "proximity_high":   round(proximity_to_high, 3),
+                    "sources":          ["bitget_movers"],
+                    "is_new_listing":   False,
+                    "listing_age_days": None,
+                })
+            # Ordina per (chg * vol) — momentum assoluto
+            out.sort(key=lambda x: x["price_change_24h"] * x["volume_24h_usd"], reverse=True)
+            logger.debug(f"[EMERGING] Bitget movers (chg≥{min_chg}%): {len(out[:25])}")
+            return out[:25]
+        except Exception as e:
+            logger.debug(f"[EMERGING] Bitget movers: {e}")
+            return []
+
     # ─── Helpers ─────────────────────────────────────────────────────────────
 
     def _coingecko_markets_by_ids(self, ids: list[str], source: str) -> list[dict]:
@@ -438,13 +486,35 @@ class EmergingScanner:
             raw[sym] = existing
 
     def _est_surge(self, volume_24h: float) -> float:
-        """Stima euristica volume surge dal volume assoluto."""
-        if volume_24h > 1_000_000_000: return 8.0
-        if volume_24h >   500_000_000: return 5.0
-        if volume_24h >   100_000_000: return 3.5
-        if volume_24h >    50_000_000: return 2.5
-        if volume_24h >    10_000_000: return 1.8
-        return 1.0
+        """Surge reale basato su ranking relativo tra tutti i ticker Bitget.
+        Aggiorna la cache dei volumi medi ogni 30 minuti.
+        """
+        now = time.time()
+        if not hasattr(self, "_vol_cache") or (now - getattr(self, "_vol_cache_ts", 0)) > 1800:
+            try:
+                r = requests.get(f"{BITGET_BASE}/spot/market/tickers",
+                                 headers=_HEADERS, timeout=10)
+                if r.status_code == 200:
+                    vols = [float(t.get("usdtVol", 0) or 0)
+                            for t in r.json().get("data", [])
+                            if t.get("symbol", "").endswith("USDT")]
+                    vols = sorted([v for v in vols if v > 0])
+                    if vols:
+                        # percentile 50 = volume mediano del mercato
+                        mid = len(vols) // 2
+                        self._vol_median = vols[mid]
+                        self._vol_p75    = vols[int(len(vols) * 0.75)]
+                        self._vol_p90    = vols[int(len(vols) * 0.90)]
+                        self._vol_cache_ts = now
+            except Exception:
+                pass
+
+        median = getattr(self, "_vol_median", 5_000_000)
+        if median <= 0:
+            median = 5_000_000
+
+        surge = volume_24h / median
+        return min(round(surge, 2), 20.0)
 
     def _score(self, coin: dict) -> tuple[float, dict]:
         """
