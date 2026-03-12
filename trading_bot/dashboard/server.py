@@ -88,35 +88,25 @@ def _write_config(cfg: dict) -> None:
 
 def _apply_to_settings(cfg: dict) -> list[str]:
     """
-    Applica la nuova config direttamente al modulo settings a runtime.
-    Funziona solo se bot e dashboard girano nello STESSO processo (start.sh).
+    Applica la config al singleton DynamicSettings.
+    Funziona sia se bot+dashboard sono nello stesso processo (start.sh)
+    sia se sono processi separati (Railway multi-service):
+    - Stesso processo  -> set_many() applica subito in-memory
+    - Processo diverso -> il file runtime_config.json viene riletto entro 5s
     Ritorna la lista dei campi effettivamente modificati.
     """
-    changed = []
     try:
         from trading_bot.config import settings as S
-
-        fields = [
-            "MAX_RISK_PCT", "DEFAULT_LEVERAGE", "MAX_DAILY_LOSS_PCT",
-            "MAX_DRAWDOWN_PCT", "TAKE_PROFIT_RATIO", "TRAILING_STOP_PCT",
-            "MAX_POSITIONS_SPOT", "MAX_POSITIONS_FUTURES", "MARGIN_MODE",
-            "ENABLE_RSI_MACD", "ENABLE_BOLLINGER", "ENABLE_BREAKOUT",
-            "ENABLE_SCALPING",
-        ]
-        for field in fields:
-            if field in cfg and hasattr(S, field):
-                old = getattr(S, field)
-                new = cfg[field]
-                if old != new:
-                    setattr(S, field, new)
-                    changed.append(f"{field}: {old} → {new}")
-                    logger.info(f"[CONFIG LIVE] {field}: {old} → {new}")
-
-    except ImportError:
-        # Processo separato — nessun apply live, solo file
-        logger.debug("[CONFIG] Processo separato — solo file aggiornato")
-
-    return changed
+        changed = S.set_many(cfg)
+        if changed:
+            for c in changed:
+                logger.info(f"[CONFIG LIVE] {c}")
+        else:
+            logger.debug("[CONFIG] Nessun campo modificato rispetto ai valori correnti")
+        return changed
+    except Exception as e:
+        logger.warning(f"[CONFIG] Impossibile applicare in-process: {e} — il file sara letto al prossimo ciclo")
+        return []
 
 
 # ── State I/O ─────────────────────────────────────────────────────────────────
@@ -271,58 +261,85 @@ async def update_config(payload: ConfigPayload):
 
 # ── Accessori ─────────────────────────────────────────────────────────────────
 
+@app.delete("/api/config")
+async def reset_config():
+    """Resetta la configurazione runtime ai valori Railway Variables / default."""
+    # 1. Cancella file su disco
+    try:
+        if os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    except Exception as e:
+        logger.warning(f"[CONFIG] Impossibile cancellare config file: {e}")
+
+    # 2. Svuota override in-memory del singleton (stesso processo)
+    try:
+        from trading_bot.config import settings as S
+        S.reset_runtime()
+        logger.info("[CONFIG] settings.reset_runtime() OK")
+    except Exception as e:
+        logger.debug(f"[CONFIG] reset_runtime non disponibile: {e}")
+
+    # 3. Notifica WS
+    defaults = ConfigPayload().dict()
+    await manager.broadcast({
+        "type": "config_updated",
+        "data": {"config": defaults, "changed": ["RESET"], "applied_live": True}
+    })
+
+    return {"ok": True, "message": "Config resettata ai valori Railway Variables", "config": defaults}
+
+
 @app.post("/api/restart")
 async def restart_bot():
     """
-    Riavvia il processo del bot in modo graceful.
-    Funziona su Railway perché il processo principale (python -m trading_bot.main)
-    viene riavviato dallo scheduler Railway quando esce con codice 0.
+    Riavvia il processo corrente tramite os.execv (self-exec).
+    Funziona sia su Railway che in locale:
+    - os.execv sostituisce il processo corrente col lo stesso comando
+    - Railway/Procfile vedono il nuovo processo e lo gestisce normalmente
+    - La dashboard WebSocket si disconnette e il client fa polling fino al ritorno
 
-    Strategia:
-    - Segnala al bot di fermarsi (setta _bot_ref._running = False)
-    - Il loop principale esce, Railway/Procfile rilancia automaticamente
-    - Se il bot non è nello stesso processo, usa os.kill(os.getpid(), SIGTERM)
-      che Railway intercetta e riavvia
+    Nessun bisogno di SIGTERM o redeploy: il processo si riavvia da solo.
     """
-    import os
-    import signal
+    import sys
     import threading
 
-    logger.warning("[RESTART] Riavvio richiesto dalla dashboard")
+    logger.warning("[RESTART] Riavvio self-exec richiesto dalla dashboard")
 
-    # Notifica i client WS prima di morire
     await manager.broadcast({
         "type": "restarting",
         "data": {"message": "Bot in riavvio — riconnessione automatica tra 15-30s"}
     })
 
-    # Lascia 1s per la consegna del messaggio WS, poi triggera il riavvio
     def _do_restart():
-        import time
-        time.sleep(1)
+        import time, os, sys
+        time.sleep(1.5)   # tempo per consegnare il messaggio WS
         try:
-            # Prova prima a fermare il bot via _running flag
-            # (funziona se bot e dashboard sono stesso processo via start.sh)
-            import importlib
+            # Prova shutdown graceful del bot (stesso processo)
             try:
+                import importlib
                 main_mod = importlib.import_module("trading_bot.main")
                 if hasattr(main_mod, "_bot_ref") and main_mod._bot_ref:
                     main_mod._bot_ref._running = False
-                    logger.info("[RESTART] _running = False — bot si fermerà al prossimo ciclo")
-                    time.sleep(6)   # aspetta che il loop finisca
+                    logger.info("[RESTART] _running=False — attendo stop bot...")
+                    time.sleep(4)
             except Exception:
                 pass
-            # SIGTERM → Railway rileva l'uscita e fa redeploy
-            logger.warning("[RESTART] SIGTERM — Railway riavvierà il servizio")
-            os.kill(os.getpid(), signal.SIGTERM)
-        except Exception as e:
-            logger.error(f"[RESTART] Errore: {e}")
 
-    threading.Thread(target=_do_restart, daemon=True).start()
+            # os.execv: rimpiazza questo processo con se stesso
+            # argv viene ricostruito identico -> Railway non si accorge di nulla
+            logger.warning(f"[RESTART] os.execv({sys.executable}, {sys.argv})")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        except Exception as e:
+            logger.error(f"[RESTART] execv fallito: {e} — tento sys.exit(1) per Railway restart")
+            import sys as _sys
+            _sys.exit(1)   # Railway restart automatico su exit != 0
+
+    threading.Thread(target=_do_restart, daemon=False).start()
 
     return {
         "ok":      True,
-        "message": "Riavvio avviato — il servizio Railway si riavvierà automaticamente",
+        "message": "Riavvio avviato — riconnessione automatica entro 20s",
         "eta_sec": 20,
     }
 
