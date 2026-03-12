@@ -196,9 +196,54 @@
 
   /* EMERGING */
   .emerging-list { display: flex; flex-direction: column; }
-  .em-row { display: grid; grid-template-columns: 36px 1fr 70px 60px 56px; gap: 8px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border2); transition: background .1s; }
+  .em-row { display: grid; grid-template-columns: 28px 1fr 68px 56px 72px; gap: 6px; align-items: center; padding: 9px 16px; border-bottom: 1px solid var(--border2); transition: background .1s; cursor: pointer; }
   .em-row:last-child { border-bottom: none; }
   .em-row:hover { background: var(--bg); }
+  .em-row.expanded { background: var(--bg); }
+  .em-rank { font-family: var(--mono); font-size: 11px; color: var(--text3); text-align: center; }
+  .em-sym  { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 5px; }
+  .em-name { font-size: 10px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+  .em-vol  { font-family: var(--mono); font-size: 11px; color: var(--text2); text-align: right; }
+  .em-chg  { font-family: var(--mono); font-size: 12px; font-weight: 600; text-align: right; }
+  .em-score-wrap { display: flex; flex-direction: column; gap: 2px; }
+  .em-score-bar  { height: 4px; background: var(--border2); border-radius: 2px; overflow: hidden; }
+  .em-score-fill { height: 100%; background: var(--blue); border-radius: 2px; transition: width .4s; }
+  .em-score-num  { font-size: 9px; font-family: var(--mono); color: var(--text3); text-align: right; }
+  .em-source-tag { font-size: 9px; padding: 1px 5px; border-radius: 8px; font-weight: 500; }
+  .src-trending  { background: #FFF3C4; color: #7A4F01; }
+  .src-gainers   { background: #DCFCE7; color: #166534; }
+  .src-cg_gainers{ background: #E0E7FF; color: #3730A3; }
+  .src-new_listing{ background: #FCE7F3; color: #9D174D; }
+  .src-vol_spike { background: #FEF3C7; color: #92400E; }
+  /* Dettaglio espanso per ogni coin */
+  .em-detail { display: none; padding: 10px 16px 12px; background: var(--bg); border-bottom: 1px solid var(--border2); }
+  .em-detail.open { display: block; }
+  .em-detail-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 8px; margin-bottom: 8px; }
+  .em-dim  { background: var(--card); border: 1px solid var(--border2); border-radius: 6px; padding: 6px 8px; }
+  .em-dim-label { font-size: 9px; color: var(--text3); text-transform: uppercase; letter-spacing: .4px; }
+  .em-dim-val   { font-size: 13px; font-weight: 600; font-family: var(--mono); color: var(--text); margin-top: 2px; }
+  .em-dim-max   { font-size: 9px; color: var(--text3); font-family: var(--mono); }
+  .em-tags      { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .em-tag       { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .tag-new { background: #FCE7F3; color: #9D174D; }
+  .tag-mcap { background: var(--border2); color: var(--text2); }
+  .tag-src  { background: #DBEAFE; color: #1E40AF; }
+  .pos { color: var(--green); }
+  .neg { color: var(--red); }
+  /* Filtri scanner */
+  .em-filters { padding: 12px 16px; border-top: 1px solid var(--border2); }
+  .em-filters-title { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .em-filters-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .em-filter-row { display: flex; flex-direction: column; gap: 3px; }
+  .em-filter-label { font-size: 10px; color: var(--text2); }
+  .em-filter-input { font-size: 12px; font-family: var(--mono); padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); width: 100%; box-sizing: border-box; }
+  .em-filter-input:focus { outline: none; border-color: var(--blue); }
+  .em-filter-full { grid-column: 1 / -1; }
+  .em-apply-btn { width: 100%; margin-top: 10px; padding: 7px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); transition: background .15s; }
+  .em-apply-btn:hover { background: var(--border2); }
+  .em-filters-toggle { font-size: 10px; color: var(--blue); cursor: pointer; }
+  .em-filters-body { display: none; }
+  .em-filters-body.open { display: block; }
   .em-rank { font-family: var(--mono); font-size: 11px; color: var(--text3); text-align: center; }
   .em-sym  { font-weight: 600; font-size: 13px; }
   .em-name { font-size: 10px; color: var(--text3); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -427,13 +472,62 @@
     <div class="card">
       <div class="card-header">
         <span class="card-title">Cripto Emergenti</span>
-        <span id="emCount" style="font-size:11px;color:var(--text3)">0 coin</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="emCount" style="font-size:11px;color:var(--text3)">0 coin</span>
+          <span id="emScanAge" style="font-size:10px;color:var(--text3);font-family:var(--mono)"></span>
+        </div>
       </div>
-      <div class="em-header">
-        <span>#</span><span>Simbolo</span><span>Vol 24h</span><span>Chg%</span><span>Score</span>
+      <!-- Header colonne -->
+      <div class="em-header" style="display:grid;grid-template-columns:28px 1fr 68px 56px 72px;gap:6px;padding:6px 16px;font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border2)">
+        <span>#</span><span>Simbolo</span><span style="text-align:right">Vol 24h</span><span style="text-align:right">Chg%</span><span style="text-align:right">Score</span>
       </div>
+      <!-- Lista coin -->
       <div class="emerging-list" id="emergingList">
         <div class="empty-state">In attesa dei dati...</div>
+      </div>
+      <!-- Filtri scanner -->
+      <div class="em-filters">
+        <div class="em-filters-title">
+          <span>Filtri Scanner</span>
+          <span class="em-filters-toggle" onclick="toggleEmFilters()">▼ mostra</span>
+        </div>
+        <div class="em-filters-body" id="emFiltersBody">
+          <div class="em-filters-grid">
+            <div class="em-filter-row">
+              <div class="em-filter-label">Vol 24h min (USD)</div>
+              <input class="em-filter-input" id="emVolMin" type="number" placeholder="5000000" value="5000000">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Change 24h min (%)</div>
+              <input class="em-filter-input" id="emChgMin" type="number" placeholder="5" value="5" step="0.5">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Volume Surge min (×)</div>
+              <input class="em-filter-input" id="emSurgeMin" type="number" placeholder="2" value="2" step="0.1">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Max risultati</div>
+              <input class="em-filter-input" id="emMaxResults" type="number" placeholder="10" value="10" min="1" max="30">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Market Cap min (USD)</div>
+              <input class="em-filter-input" id="emMcapMin" type="number" placeholder="0" value="0">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Market Cap max (USD)</div>
+              <input class="em-filter-input" id="emMcapMax" type="number" placeholder="2000000000" value="2000000000">
+            </div>
+            <div class="em-filter-row">
+              <div class="em-filter-label">Listing recente (giorni)</div>
+              <input class="em-filter-input" id="emListingDays" type="number" placeholder="30" value="30" min="1">
+            </div>
+            <div class="em-filter-row em-filter-full">
+              <div class="em-filter-label">Simboli esclusi (virgola)</div>
+              <input class="em-filter-input" id="emExclude" type="text" placeholder="PEPE,SHIB,DOGE">
+            </div>
+          </div>
+          <button class="em-apply-btn" onclick="applyEmFilters()">💾 Salva filtri sul DB e riavvia scan</button>
+        </div>
       </div>
     </div>
 
@@ -988,31 +1082,191 @@ function fundingBadge(v) { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>0
 function lsBadge(v)      { if(v==null) return{cls:'badge-neu',txt:'N/D'}; if(v>2.0||v<0.5) return{cls:'badge-ko',txt:'KO'}; if(v>1.5) return{cls:'badge-war',txt:'WARN'}; return{cls:'badge-ok',txt:'OK'}; }
 
 // ════════════════════════════════════════════════════════
-// EMERGING
+// EMERGING v2
 // ════════════════════════════════════════════════════════
+var _emExpanded = new Set();
+var _emFiltersOpen = false;
+
+// Tag per ogni source con colore
+var _SRC_LABELS = {
+  trending:    { emoji:'🔥', txt:'Trending',    cls:'src-trending'  },
+  bitget_gainers: { emoji:'📈', txt:'Gainers',  cls:'src-gainers'   },
+  cg_gainers:  { emoji:'🏆', txt:'CG Top',     cls:'src-cg_gainers'},
+  new_listing: { emoji:'🆕', txt:'New',         cls:'src-new_listing'},
+  vol_spike:   { emoji:'⚡', txt:'Vol Spike',  cls:'src-vol_spike' },
+};
+
 function renderEmerging(coins) {
   const el = document.getElementById('emergingList');
   set('emCount', coins.length + ' coin');
-  if (!coins.length) { el.innerHTML = '<div class="empty-state">Nessuna coin emergente trovata</div>'; return; }
-  el.innerHTML = coins.slice(0,8).map((c,i) => {
-    const chgCls = (c.price_change_24h||0) >= 0 ? 'pos' : 'neg';
-    const chgTxt = (c.price_change_24h||0) >= 0 ? `+${(c.price_change_24h||0).toFixed(1)}%` : `${(c.price_change_24h||0).toFixed(1)}%`;
-    const score  = Math.round(c.score || 0);
-    const srcCls = c.source==='trending' ? 'src-trending' : 'src-gainers';
-    const srcTxt = c.source==='trending' ? '🔥' : '📈';
-    return `<div class="em-row">
-      <div class="em-rank">${i+1}</div>
-      <div><div class="em-sym">${c.symbol}<span class="em-source-tag ${srcCls}">${srcTxt}</span></div><div class="em-name">${c.name||''}</div></div>
-      <div class="em-vol">${fmtVol(c.volume_24h_usd)}</div>
-      <div class="em-chg ${chgCls}">${chgTxt}</div>
-      <div class="em-score-wrap">
-        <div class="em-score-bar"><div class="em-score-fill" style="width:${score}%"></div></div>
-        <div class="em-score-num">${score}/100</div>
+  if (!coins.length) {
+    el.innerHTML = '<div class="empty-state">Nessuna coin emergente trovata</div>';
+    return;
+  }
+
+  el.innerHTML = coins.map((c, i) => {
+    const chgCls  = (c.price_change_24h||0) >= 0 ? 'pos' : 'neg';
+    const chgSign = (c.price_change_24h||0) >= 0 ? '+' : '';
+    const chgTxt  = chgSign + (c.price_change_24h||0).toFixed(1) + '%';
+    const score   = Math.round(c.score || 0);
+    const isExp   = _emExpanded.has(c.symbol);
+
+    // Source tags (max 2)
+    const srcs    = (c.sources || ['unknown']).slice(0, 2);
+    const srcTags = srcs.map(s => {
+      const def = _SRC_LABELS[s] || { emoji:'•', txt:s, cls:'src-gainers' };
+      return `<span class="em-source-tag ${def.cls}">${def.emoji}</span>`;
+    }).join('');
+
+    // Score bar color
+    const scoreColor = score >= 70 ? 'var(--green)' : score >= 45 ? 'var(--blue)' : 'var(--yellow)';
+
+    // Dettaglio score breakdown (visibile quando espanso)
+    const sd = c.score_detail || {};
+    const detailHtml = `
+      <div class="em-detail${isExp ? ' open' : ''}" id="emd-${c.symbol}">
+        <div class="em-detail-grid">
+          <div class="em-dim">
+            <div class="em-dim-label">Momentum</div>
+            <div class="em-dim-val">${sd.momentum||0}</div>
+            <div class="em-dim-max">/ 25</div>
+          </div>
+          <div class="em-dim">
+            <div class="em-dim-label">Volume</div>
+            <div class="em-dim-val">${sd.volume||0}</div>
+            <div class="em-dim-max">/ 20</div>
+          </div>
+          <div class="em-dim">
+            <div class="em-dim-label">Surge</div>
+            <div class="em-dim-val">${sd.surge||0}</div>
+            <div class="em-dim-max">/ 20</div>
+          </div>
+          <div class="em-dim">
+            <div class="em-dim-label">Small Cap</div>
+            <div class="em-dim-val">${sd.small_cap||0}</div>
+            <div class="em-dim-max">/ 20</div>
+          </div>
+          <div class="em-dim">
+            <div class="em-dim-label">Multi-src</div>
+            <div class="em-dim-val">${sd.multi_source||0}</div>
+            <div class="em-dim-max">/ 15</div>
+          </div>
+        </div>
+        <div class="em-tags">
+          ${(c.sources||[]).map(s => {
+            const def = _SRC_LABELS[s] || { emoji:'•', txt:s, cls:'src-gainers' };
+            return `<span class="em-tag tag-src">${def.emoji} ${def.txt}</span>`;
+          }).join('')}
+          ${c.is_new_listing ? `<span class="em-tag tag-new">🆕 Listed ${c.listing_age_days||'?'}d ago</span>` : ''}
+          ${c.market_cap_usd > 0 ? `<span class="em-tag tag-mcap">MCap $${fmtVol(c.market_cap_usd)}</span>` : ''}
+          ${c.volume_surge > 0 ? `<span class="em-tag tag-src">Surge ×${(c.volume_surge||0).toFixed(1)}</span>` : ''}
+        </div>
+      </div>`;
+
+    return `
+      <div class="em-row${isExp ? ' expanded' : ''}" onclick="toggleEmRow('${c.symbol}')">
+        <div class="em-rank">${i+1}</div>
+        <div>
+          <div class="em-sym">${c.symbol}${srcTags}</div>
+          <div class="em-name">${c.name||''}</div>
+        </div>
+        <div class="em-vol">${fmtVol(c.volume_24h_usd)}</div>
+        <div class="em-chg ${chgCls}">${chgTxt}</div>
+        <div class="em-score-wrap">
+          <div class="em-score-bar">
+            <div class="em-score-fill" style="width:${score}%;background:${scoreColor}"></div>
+          </div>
+          <div class="em-score-num">${score}/100</div>
+        </div>
       </div>
-    </div>`;
+      ${detailHtml}`;
   }).join('');
 }
-function fmtVol(n) { if(!n) return '—'; if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(0)+'M'; if(n>=1e3) return (n/1e3).toFixed(0)+'K'; return n.toFixed(0); }
+
+function toggleEmRow(sym) {
+  if (_emExpanded.has(sym)) {
+    _emExpanded.delete(sym);
+  } else {
+    _emExpanded.add(sym);
+  }
+  // Toggle DOM direttamente senza re-render completo
+  const det = document.getElementById('emd-' + sym);
+  if (det) det.classList.toggle('open');
+  // Toggle classe expanded sulla riga
+  const rows = document.querySelectorAll('.em-row');
+  rows.forEach(r => {
+    if (r.textContent.includes(sym)) r.classList.toggle('expanded');
+  });
+}
+
+function toggleEmFilters() {
+  _emFiltersOpen = !_emFiltersOpen;
+  const body = document.getElementById('emFiltersBody');
+  const tgl  = document.querySelector('.em-filters-toggle');
+  if (body) body.classList.toggle('open', _emFiltersOpen);
+  if (tgl)  tgl.textContent = _emFiltersOpen ? '▲ nascondi' : '▼ mostra';
+}
+
+async function applyEmFilters() {
+  const params = {
+    EM_MIN_VOLUME_USD:   parseFloat(document.getElementById('emVolMin').value)   || 5000000,
+    EM_MIN_CHANGE_24H:   parseFloat(document.getElementById('emChgMin').value)   || 5.0,
+    EM_MIN_VOLUME_SURGE: parseFloat(document.getElementById('emSurgeMin').value) || 2.0,
+    EM_MAX_RESULTS:      parseInt(document.getElementById('emMaxResults').value)  || 10,
+    EM_MIN_MARKET_CAP:   parseFloat(document.getElementById('emMcapMin').value)  || 0,
+    EM_MAX_MARKET_CAP:   parseFloat(document.getElementById('emMcapMax').value)  || 2000000000,
+    EM_NEW_LISTING_DAYS: parseInt(document.getElementById('emListingDays').value) || 30,
+    EM_EXCLUDE_SYMBOLS:  document.getElementById('emExclude').value.trim(),
+  };
+
+  const btn = document.querySelector('.em-apply-btn');
+  btn.textContent = '⏳ Salvataggio...';
+  btn.disabled    = true;
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    if (res.ok) {
+      btn.textContent = '✅ Salvato — scan in corso...';
+      setTimeout(() => { btn.textContent = '💾 Salva filtri sul DB e riavvia scan'; btn.disabled = false; }, 3000);
+    } else {
+      btn.textContent = '❌ Errore salvataggio';
+      btn.disabled    = false;
+    }
+  } catch (e) {
+    btn.textContent = '❌ Errore rete';
+    btn.disabled    = false;
+  }
+}
+
+// Aggiorna i campi filtri quando arriva la config dal DB
+function _populateEmFilters(cfg) {
+  const map = {
+    EM_MIN_VOLUME_USD:   'emVolMin',
+    EM_MIN_CHANGE_24H:   'emChgMin',
+    EM_MIN_VOLUME_SURGE: 'emSurgeMin',
+    EM_MAX_RESULTS:      'emMaxResults',
+    EM_MIN_MARKET_CAP:   'emMcapMin',
+    EM_MAX_MARKET_CAP:   'emMcapMax',
+    EM_NEW_LISTING_DAYS: 'emListingDays',
+    EM_EXCLUDE_SYMBOLS:  'emExclude',
+  };
+  for (const [key, id] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el && cfg[key] != null) el.value = cfg[key];
+  }
+}
+
+function fmtVol(n) {
+  if(!n) return '—';
+  if(n>=1e9) return (n/1e9).toFixed(1)+'B';
+  if(n>=1e6) return (n/1e6).toFixed(0)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(0)+'K';
+  return n.toFixed(0);
+}
 
 // ════════════════════════════════════════════════════════
 // CONFIG PANEL
@@ -1118,6 +1372,9 @@ function _populateFormFromConfig(cfg) {
   if (cfg.FEAR_GREED_LONG_MAX  != null) document.getElementById('cfgFgLongMax').value   = cfg.FEAR_GREED_LONG_MAX;
   if (cfg.FEAR_GREED_SHORT_MIN != null) document.getElementById('cfgFgShortMin').value  = cfg.FEAR_GREED_SHORT_MIN;
   if (cfg.FEAR_GREED_SHORT_MAX != null) document.getElementById('cfgFgShortMax').value  = cfg.FEAR_GREED_SHORT_MAX;
+
+  // Emerging scanner filtri
+  _populateEmFilters(cfg);
 
   updateHints();
   updateRiskMeter();
