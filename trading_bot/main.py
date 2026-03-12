@@ -158,11 +158,11 @@ class TradingBot:
             logger.warning(f"Balance init: {_e}")
 
         self.notifier.startup(
-            mode            = settings.TRADING_MODE,
-            symbols_spot    = settings.SPOT_SYMBOLS    if "spot"    in settings.MARKET_TYPES else [],
-            symbols_futures = settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [],
-            bal_spot        = _bal_spot,
-            bal_futures     = _bal_futures,
+            settings.TRADING_MODE,
+            settings.SPOT_SYMBOLS    if "spot"    in settings.MARKET_TYPES else [],
+            settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [],
+            _bal_spot,
+            _bal_futures,
         )
 
         # ── Schedule ─────────────────────────────────────────────────────────
