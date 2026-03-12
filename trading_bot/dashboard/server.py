@@ -89,23 +89,24 @@ def _write_config(cfg: dict) -> None:
 def _apply_to_settings(cfg: dict) -> list[str]:
     """
     Applica la config al singleton DynamicSettings.
-    Funziona sia se bot+dashboard sono nello stesso processo (start.sh)
-    sia se sono processi separati (Railway multi-service):
-    - Stesso processo  -> set_many() applica subito in-memory
-    - Processo diverso -> il file runtime_config.json viene riletto entro 5s
-    Ritorna la lista dei campi effettivamente modificati.
+    set_many() fa:
+      1. Override in-memory immediato (stesso processo)
+      2. Salva su PostgreSQL  -> PERSISTE tra restart Railway
+      3. Fallback file se DB non disponibile
+    Funziona sia con processi unificati che separati.
     """
     try:
         from trading_bot.config import settings as S
         changed = S.set_many(cfg)
         if changed:
-            for c in changed:
-                logger.info(f"[CONFIG LIVE] {c}")
+            for ch in changed:
+                logger.info(f"[CONFIG LIVE] {ch}")
+            logger.info(f"[CONFIG] {len(changed)} campi salvati su DB — persistenti al restart")
         else:
-            logger.debug("[CONFIG] Nessun campo modificato rispetto ai valori correnti")
+            logger.debug("[CONFIG] Nessun campo modificato")
         return changed
     except Exception as e:
-        logger.warning(f"[CONFIG] Impossibile applicare in-process: {e} — il file sara letto al prossimo ciclo")
+        logger.warning(f"[CONFIG] Errore apply: {e}")
         return []
 
 
@@ -203,8 +204,15 @@ async def get_state():
 
 @app.get("/api/config")
 async def get_config():
-    """Ritorna la configurazione runtime corrente."""
-    return _read_config()
+    """Ritorna la configurazione runtime corrente + info backend."""
+    cfg = _read_config()
+    # Aggiungi info sul backend di storage
+    try:
+        from trading_bot.config import settings as S
+        cfg["_storage_backend"] = S.storage_backend()
+    except Exception:
+        cfg["_storage_backend"] = "unknown"
+    return cfg
 
 
 @app.post("/api/config")
@@ -263,30 +271,34 @@ async def update_config(payload: ConfigPayload):
 
 @app.delete("/api/config")
 async def reset_config():
-    """Resetta la configurazione runtime ai valori Railway Variables / default."""
-    # 1. Cancella file su disco
-    try:
-        if os.path.exists(CONFIG_FILE):
-            os.remove(CONFIG_FILE)
-    except Exception as e:
-        logger.warning(f"[CONFIG] Impossibile cancellare config file: {e}")
-
-    # 2. Svuota override in-memory del singleton (stesso processo)
+    """
+    Reset completo:
+    - Cancella la tabella bot_config dal PostgreSQL
+    - Svuota override in-memory
+    - Cancella file fallback
+    Torna ai valori Railway Variables / default hardcoded.
+    """
     try:
         from trading_bot.config import settings as S
         S.reset_runtime()
-        logger.info("[CONFIG] settings.reset_runtime() OK")
+        logger.info("[CONFIG] reset_runtime() OK — DB + file + memory svuotati")
     except Exception as e:
-        logger.debug(f"[CONFIG] reset_runtime non disponibile: {e}")
+        logger.warning(f"[CONFIG] reset_runtime parziale: {e}")
 
-    # 3. Notifica WS
+    # Cancella anche il file su disco (ridondante ma sicuro)
+    try:
+        if os.path.exists(CONFIG_FILE):
+            os.remove(CONFIG_FILE)
+    except Exception:
+        pass
+
     defaults = ConfigPayload().dict()
     await manager.broadcast({
         "type": "config_updated",
         "data": {"config": defaults, "changed": ["RESET"], "applied_live": True}
     })
 
-    return {"ok": True, "message": "Config resettata ai valori Railway Variables", "config": defaults}
+    return {"ok": True, "message": "Config resettata — Railway Variables / default attivi", "config": defaults}
 
 
 @app.post("/api/restart")
@@ -311,29 +323,24 @@ async def restart_bot():
     })
 
     def _do_restart():
-        import time, os, sys
-        time.sleep(1.5)   # tempo per consegnare il messaggio WS
+        import time, sys
+        time.sleep(1.5)   # consegna messaggio WS ai client
+
+        # Stop graceful del bot (se stesso processo)
         try:
-            # Prova shutdown graceful del bot (stesso processo)
-            try:
-                import importlib
-                main_mod = importlib.import_module("trading_bot.main")
-                if hasattr(main_mod, "_bot_ref") and main_mod._bot_ref:
-                    main_mod._bot_ref._running = False
-                    logger.info("[RESTART] _running=False — attendo stop bot...")
-                    time.sleep(4)
-            except Exception:
-                pass
+            import importlib
+            main_mod = importlib.import_module("trading_bot.main")
+            if hasattr(main_mod, "_bot_ref") and main_mod._bot_ref:
+                main_mod._bot_ref._running = False
+                logger.info("[RESTART] _running=False — attendo stop graceful...")
+                time.sleep(3)
+        except Exception:
+            pass
 
-            # os.execv: rimpiazza questo processo con se stesso
-            # argv viene ricostruito identico -> Railway non si accorge di nulla
-            logger.warning(f"[RESTART] os.execv({sys.executable}, {sys.argv})")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
-        except Exception as e:
-            logger.error(f"[RESTART] execv fallito: {e} — tento sys.exit(1) per Railway restart")
-            import sys as _sys
-            _sys.exit(1)   # Railway restart automatico su exit != 0
+        # sys.exit(0) -> Railway/Procfile vede uscita pulita e riavvia
+        # La config e' gia' salvata su PostgreSQL, quindi sopravvive al restart
+        logger.warning("[RESTART] sys.exit(0) — Railway riavviera il servizio automaticamente")
+        sys.exit(0)
 
     threading.Thread(target=_do_restart, daemon=False).start()
 
@@ -356,7 +363,14 @@ async def get_emerging():
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+    info = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+    try:
+        from trading_bot.config import settings as S
+        info["storage"] = S.storage_backend()
+        info["config_keys"] = list(S._db_cache.keys()) or list(S._file_cache.keys())
+    except Exception:
+        pass
+    return info
 
 
 @app.websocket("/ws")
