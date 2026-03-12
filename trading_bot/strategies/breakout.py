@@ -25,8 +25,8 @@ class BreakoutStrategy(BaseStrategy):
 
     def __init__(self,
                  lookback: int = 20,          # periodi per il range
-                 vol_multiplier: float = 2.0,  # volume spike richiesto
-                 atr_expansion: float = 1.2):  # ATR > media * questo fattore
+                 vol_multiplier: float = 1.5,  # era 2.0 — abbassato
+                 atr_expansion: float = 1.05): # era 1.2 — quasi sempre soddisfatta
         self.lookback       = lookback
         self.vol_multiplier = vol_multiplier
         self.atr_expansion  = atr_expansion
@@ -68,7 +68,7 @@ class BreakoutStrategy(BaseStrategy):
             and vol_r >= self.vol_multiplier                # volume spike
             and atr_expanding):                             # ATR in espansione
             side = "buy"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 58.0    # era 65
             notes_list.append(f"breakout {range_high:.4f} (lookback {self.lookback})")
             notes_list.append(f"volume {vol_r:.1f}x avg")
 
@@ -92,7 +92,7 @@ class BreakoutStrategy(BaseStrategy):
               and vol_r >= self.vol_multiplier
               and atr_expanding):
             side = "sell"
-            confidence = self.MIN_CONFIDENCE   # soglia base dal DB
+            confidence = 58.0    # era 65
             notes_list.append(f"breakout sotto {range_low:.4f}")
             notes_list.append(f"volume {vol_r:.1f}x avg")
 
@@ -110,7 +110,10 @@ class BreakoutStrategy(BaseStrategy):
                 confidence += 5
                 notes_list.append(f"rottura netta -{breakout_pct:.1f}%")
 
-        if side is None or confidence < self.MIN_CONFIDENCE:
+        if side is None:
+            return None
+        if confidence < self.MIN_CONFIDENCE:
+            logger.debug(f"[BREAKOUT] {symbol} conf={confidence:.0f}% < {self.MIN_CONFIDENCE:.0f}% scartato")
             return None
 
         # SL appena dentro il range rotto, TP proiettato
@@ -121,7 +124,7 @@ class BreakoutStrategy(BaseStrategy):
             stop_loss   = round(range_low + atr_val * 0.5, 6)
             take_profit = round(last_close - (stop_loss - last_close) * settings.TAKE_PROFIT_RATIO, 6)
 
-        logger.debug(f"[BREAKOUT] {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
+        logger.info(f"[BREAKOUT] SEGNALE {symbol} {market} {side} conf={confidence:.0f}% | {', '.join(notes_list)}")
 
         return Signal(
             strategy    = self.NAME,

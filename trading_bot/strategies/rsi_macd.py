@@ -25,8 +25,8 @@ class RSIMACDStrategy(BaseStrategy):
                  rsi_period: int = 14,
                  rsi_oversold: float = 35,       # era 32
                  rsi_overbought: float = 65,      # era 68
-                 rsi_exit_long: float = 42,        # era 45
-                 rsi_exit_short: float = 58):      # era 55
+                 rsi_exit_long: float = 38,        # era 45 → 42 → 38
+                 rsi_exit_short: float = 62):      # era 55 → 58 → 62
         self.rsi_period      = rsi_period
         self.rsi_oversold    = rsi_oversold
         self.rsi_overbought  = rsi_overbought
@@ -66,10 +66,10 @@ class RSIMACDStrategy(BaseStrategy):
         # ── LONG Setup ───────────────────────────────────────────────────────
         macd_cross_bull = (macd_prev < sig_prev and macd_now > sig_now)
         macd_bull_zone  = (macd_now > sig_now and hist_now > 0)  # MACD bullish anche senza crossover
-        if (rsi_p < self.rsi_oversold and rsi > self.rsi_exit_long   # RSI risale da oversold
+        if (rsi_p < self.rsi_oversold and rsi > self.rsi_exit_long and rsi > rsi_p  # RSI sale
             and (macd_cross_bull or macd_bull_zone)):                  # MACD favorevole
             side = "buy"
-            confidence = 60.0
+            confidence = 55.0    # era 60
 
             if last > e200:         # trend principale rialzista
                 confidence += 10
@@ -89,7 +89,7 @@ class RSIMACDStrategy(BaseStrategy):
               and (macd_now < sig_now and hist_now < 0 or    # MACD bearish zone
                    macd_prev > sig_prev and macd_now < sig_now)):  # OR crossover bearish
             side = "sell"
-            confidence = 60.0
+            confidence = 55.0    # era 60
 
             if last < e200:
                 confidence += 10
