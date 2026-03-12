@@ -22,8 +22,8 @@ class BitgetExchange:
     def __init__(self):
         common_config = {
             "apiKey":    settings.BITGET_API_KEY,
-            "secret":    settings.BITGET_API_SECRET,
-            "password":  settings.BITGET_API_PASSPHRASE,   # obbligatorio su Bitget
+            "secret":    settings.BITGET_SECRET,
+            "password":  settings.BITGET_PASSPHRASE,   # obbligatorio su Bitget
             "enableRateLimit": True,
             "rateLimit": 200,                           # ms tra richieste
         }
@@ -146,6 +146,21 @@ class BitgetExchange:
         markets = self._spot_markets if market == "spot" else self._futures_markets
         info = markets.get(symbol, {})
         return float(info.get("limits", {}).get("amount", {}).get("min", 0.001))
+
+    def get_min_notional(self, symbol: str, market: str = "spot") -> float:
+        """Ritorna il valore minimo in USDT per piazzare un ordine su Bitget."""
+        markets = self._spot_markets if market == "spot" else self._futures_markets
+        info = markets.get(symbol, {})
+        # Bitget espone il min notionale in limits.cost.min o limits.price.min * min_amount
+        cost_min = info.get("limits", {}).get("cost", {}).get("min", 0)
+        if cost_min and float(cost_min) > 0:
+            return float(cost_min)
+        # Fallback: prezzo minimo * quantità minima
+        price_min = float(info.get("limits", {}).get("price", {}).get("min", 0) or 0)
+        amount_min = float(info.get("limits", {}).get("amount", {}).get("min", 0.001) or 0.001)
+        if price_min > 0:
+            return price_min * amount_min
+        return 5.0   # fallback conservativo: 5 USDT
 
     def price_precision(self, symbol: str, market: str = "spot") -> int:
         markets = self._spot_markets if market == "spot" else self._futures_markets

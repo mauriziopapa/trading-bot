@@ -107,9 +107,33 @@ class RiskManager:
         else:
             size = size / entry    # converti USDT → quantità asset
 
-        logger.debug(
-            f"Sizing: balance={balance:.0f} USDT, risk_pct={risk_pct*100:.2f}%, "
-            f"kelly_mod={kelly_mod:.2f}, size={size:.6f}"
+        # ── A) Cap notionale: evita 43012 / 40762 ───────────────────────────
+        # SL stretto → risk_per_unit piccolo → size esplode oltre il balance
+        # Regola: nessun trade può costare più del 35% del balance disponibile
+        MAX_NOTIONAL_PCT = 0.35
+        MIN_NOTIONAL_USDT = 6.0   # Bitget rifiuta ordini < ~5 USDT notionale
+
+        actual_cost = size * entry   # per futures: costo = size * entry (senza leva, è il margine * leva)
+        max_notional = balance * MAX_NOTIONAL_PCT
+
+        if actual_cost > max_notional:
+            size = max_notional / entry
+            logger.info(
+                f"[CAP] {market} {entry:.4f} costo_orig={actual_cost:.2f} USDT > max={max_notional:.2f} "
+                f"→ size ridotta a {size:.6f}"
+            )
+            actual_cost = size * entry
+
+        # ── B) Floor notionale: evita "amount must be greater than minimum" ──
+        if actual_cost < MIN_NOTIONAL_USDT:
+            logger.info(
+                f"[SKIP-NOTIONAL] {market} notionale {actual_cost:.2f} USDT < min {MIN_NOTIONAL_USDT} USDT"
+            )
+            return 0.0   # il chiamante skippa se size == 0
+
+        logger.info(
+            f"[SIZING] {market} bal={balance:.0f} risk={risk_pct*100:.1f}% "
+            f"SL_dist={risk_per_unit:.4f} → size={size:.6f} cost={actual_cost:.2f} USDT"
         )
         return round(size, 6)
 
@@ -174,7 +198,15 @@ class RiskManager:
         store = self.open_spot if market == "spot" else self.open_futures
         store[symbol] = {**trade, "open_ts": time.time()}
         self.daily_trades += 1
-        logger.debug(f"Posizione aperta: {symbol} ({market}) — totale aperte: {len(store)}")
+        logger.info(
+            "[OPEN] %s %s %s | entry=%.4f size=%.6f | SL=%.4f TP=%.4f | strat=%s conf=%.0f%% | pos=%d" % (
+                market.upper(), trade.get("side", "").upper(), symbol,
+                trade.get("entry", 0), trade.get("size", 0),
+                trade.get("stop_loss", 0), trade.get("take_profit", 0),
+                trade.get("strategy", ""), trade.get("confidence", 0),
+                len(store),
+            )
+        )
 
     def register_close(self, symbol: str, pnl_pct: float, market: str = "spot"):
         store = self.open_spot if market == "spot" else self.open_futures
@@ -190,7 +222,10 @@ class RiskManager:
 
         # Aggiorna PnL giornaliero
         self.daily_pnl += pnl_pct
-        logger.debug(f"Posizione chiusa: {symbol} pnl={pnl_pct:+.2f}% — daily_pnl={self.daily_pnl:+.2f}%")
+        logger.info(
+            f"[CLOSE] {market.upper()} {symbol} pnl={pnl_pct:+.2f}% | "
+            f"daily_pnl={self.daily_pnl:+.2f}% | W={self.wins} L={self.losses}"
+        )
 
     def get_open_trade(self, symbol: str, market: str = "spot") -> dict | None:
         store = self.open_spot if market == "spot" else self.open_futures
