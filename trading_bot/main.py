@@ -1,9 +1,10 @@
 """
 Bitget Trading Bot — Main Orchestrator
 Spot + Futures | RSI/MACD + Bollinger + Breakout + Scalping
-Risk aggressivo con controllo adattivo (Kelly + ATR)
++ Sentiment Filter + Emerging Coins Scanner
 """
 
+import os
 import time
 import schedule
 from datetime import datetime, timezone
@@ -20,24 +21,27 @@ from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
+from trading_bot.utils.sentiment_analyzer import SentimentAnalyzer
+from trading_bot.utils.emerging_scanner import EmergingScanner
 
-# --- Dashboard integration ---------------------------------------------------
+# ── Dashboard integration ────────────────────────────────────────────────────
 if settings.ENABLE_DASHBOARD:
     try:
         from trading_bot.dashboard.state_writer import write_state
         DASHBOARD_ENABLED = True
-    except Exception as e:
+    except Exception:
         DASHBOARD_ENABLED = False
         write_state = None
 else:
     DASHBOARD_ENABLED = False
     write_state = None
 
-# --- Logger globale per buffer dashboard ------------------------------------
-_bot_ref = None   # assegnato in TradingBot.start()
+# ── Logger buffer ─────────────────────────────────────────────────────────────
+_bot_ref = None
 
 
 def _setup_logger():
+    os.makedirs("logs", exist_ok=True)
     logger.remove()
     logger.add(
         "logs/bot.log",
@@ -52,18 +56,16 @@ def _setup_logger():
         colorize=True,
         format="<green>{time:HH:mm:ss}</green> | <level>{level:<8}</level> | {message}"
     )
-    def _to_dashboard_buf(msg):
+    def _to_buf(msg):
         if _bot_ref is None:
             return
-        record = msg.record
         _bot_ref._recent_logs.append({
-            "ts":    record["time"].isoformat(),
-            "level": record["level"].name,
-            "msg":   record["message"],
+            "ts":    msg.record["time"].isoformat(),
+            "level": msg.record["level"].name,
+            "msg":   msg.record["message"],
         })
         _bot_ref._recent_logs = _bot_ref._recent_logs[-100:]
-
-    logger.add(_to_dashboard_buf, level="DEBUG")
+    logger.add(_to_buf, level="DEBUG")
 
 
 class TradingBot:
@@ -74,11 +76,19 @@ class TradingBot:
         self.notifier  = TelegramNotifier()
         self.db        = DB()
 
-        # Buffer per la dashboard
+        # Nuovi moduli
+        self._sentiment = SentimentAnalyzer()
+        self._emerging  = EmergingScanner(
+            min_volume_usd       = 5_000_000,
+            min_price_change_24h = 5.0,
+            max_results          = 10,
+        )
+
+        # Buffer dashboard
         self._recent_signals: list[dict] = []
         self._recent_logs:    list[dict] = []
 
-        # Strategie attive
+        # Strategie
         self.strategies: list = []
         if settings.ENABLE_RSI_MACD:
             self.strategies.append(RSIMACDStrategy())
@@ -91,7 +101,7 @@ class TradingBot:
 
         self._running = True
 
-    # --- Startup -------------------------------------------------------------
+    # ── Startup ───────────────────────────────────────────────────────────────
 
     def start(self):
         global _bot_ref
@@ -99,18 +109,36 @@ class TradingBot:
 
         _setup_logger()
         logger.info("=" * 60)
-        logger.info("BITGET TRADING BOT -- AVVIO")
-        logger.info(f"Modalita:  {settings.TRADING_MODE.upper()}")
-        logger.info(f"Mercati:   {', '.join(settings.MARKET_TYPES)}")
-        logger.info(f"Strategie: {', '.join(s.NAME for s in self.strategies)}")
-        logger.info(f"Leverage:  {settings.DEFAULT_LEVERAGE}x ({settings.MARGIN_MODE})")
-        logger.info(f"Max risk:  {settings.MAX_RISK_PCT}% per trade")
-        logger.info(f"Dashboard: {'attiva' if DASHBOARD_ENABLED else 'disabilitata'}")
+        logger.info("BITGET TRADING BOT — AVVIO")
+        logger.info(f"Modalita:   {settings.TRADING_MODE.upper()}")
+        logger.info(f"Mercati:    {', '.join(settings.MARKET_TYPES)}")
+        logger.info(f"Strategie:  {', '.join(s.NAME for s in self.strategies)}")
+        logger.info(f"Leverage:   {settings.DEFAULT_LEVERAGE}x ({settings.MARGIN_MODE})")
+        logger.info(f"Max risk:   {settings.MAX_RISK_PCT}% per trade")
+        logger.info(f"Dashboard:  {'attiva' if DASHBOARD_ENABLED else 'disabilitata'}")
+        logger.info(f"Sentiment:  attivo")
+        logger.info(f"Emerging:   attivo")
         logger.info("=" * 60)
 
         self.exchange.initialize()
         self.db.connect()
         self._sync_balance()
+
+        # Primo caricamento sentiment ed emerging
+        try:
+            s = self._sentiment.get_sentiment()
+            logger.info(f"Sentiment iniziale: {s['label']} (score={s['score']}) | bias={s['bias']}")
+            for sig in s["signals"]:
+                logger.info(f"  {sig}")
+        except Exception as e:
+            logger.warning(f"Sentiment init error: {e}")
+
+        try:
+            emerging = self._emerging.scan()
+            if emerging:
+                logger.info(f"Emerging coins: {[c['symbol'] for c in emerging]}")
+        except Exception as e:
+            logger.warning(f"Emerging init error: {e}")
 
         self.notifier.startup(
             settings.TRADING_MODE,
@@ -118,7 +146,7 @@ class TradingBot:
             settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [],
         )
 
-        # Schedule
+        # ── Schedule ─────────────────────────────────────────────────────────
         if settings.ENABLE_RSI_MACD or settings.ENABLE_BOLLINGER:
             schedule.every(5).minutes.do(self._scan_swing)
         if settings.ENABLE_BREAKOUT:
@@ -126,32 +154,38 @@ class TradingBot:
         if settings.ENABLE_SCALPING:
             schedule.every(1).minutes.do(self._scan_scalping)
 
+        # Scan emerging su simboli dinamici ogni 15 min
+        schedule.every(15).minutes.do(self._scan_emerging)
+
         schedule.every(1).minutes.do(self._monitor_positions)
         schedule.every(1).hours.do(self._health_check)
+
+        # Aggiorna sentiment ogni 15 minuti
+        schedule.every(15).minutes.do(lambda: self._sentiment.get_sentiment(force=True))
+
+        # Aggiorna emerging ogni 30 minuti
+        schedule.every(30).minutes.do(lambda: self._emerging.scan(force=True))
+
         schedule.every().day.at("00:05").do(self._daily_report)
 
         if DASHBOARD_ENABLED:
             schedule.every(1).minutes.do(lambda: write_state(self))
-            logger.info("Dashboard state writer schedulato ogni minuto")
 
         # Primo scan immediato
         self._scan_swing()
         self._scan_breakout()
-
         if DASHBOARD_ENABLED:
             write_state(self)
 
-        logger.info("Bot operativo -- in ascolto...")
-
+        logger.info("Bot operativo — in ascolto...")
         while self._running:
             schedule.run_pending()
             time.sleep(5)
 
-    # --- Market Scan ---------------------------------------------------------
+    # ── Market Scan ───────────────────────────────────────────────────────────
 
     def _scan_swing(self):
-        swing_strategies = [s for s in self.strategies
-                            if s.NAME in ("RSI_MACD", "BOLLINGER")]
+        swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
         if not swing_strategies:
             return
         for market, symbols in self._market_symbol_pairs():
@@ -202,13 +236,67 @@ class TradingBot:
                 except Exception as e:
                     logger.error(f"[scan_scalping] {symbol} {market}: {e}")
 
-    # --- Signal Processing ---------------------------------------------------
+    def _scan_emerging(self):
+        """
+        Scansiona le criptovalute emergenti identificate dall'EmergingScanner
+        con le strategie swing (RSI_MACD + BOLLINGER).
+        """
+        swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
+        if not swing_strategies:
+            return
+
+        emerging_symbols = self._emerging.get_spot_symbols()
+        if not emerging_symbols:
+            return
+
+        logger.info(f"[EMERGING SCAN] Analisi {len(emerging_symbols)} coin emergenti...")
+        for symbol in emerging_symbols:
+            try:
+                # Verifica che il simbolo esista su Bitget spot
+                df = ohlcv_to_df(
+                    self.exchange.fetch_ohlcv(symbol, settings.TF_SWING, 100, "spot")
+                )
+                if len(df) < 50:
+                    continue
+
+                for strategy in swing_strategies:
+                    signal = strategy.analyze(df, symbol, "spot")
+                    if signal:
+                        # Boost confidence per segnali su emerging con sentiment favorevole
+                        modifier = self._sentiment.confidence_modifier(signal.side)
+                        signal.confidence = min(100, signal.confidence * modifier)
+                        signal.notes += f" | emerging_boost={modifier:.1f}x"
+                        logger.info(f"[EMERGING] Segnale su {symbol} conf={signal.confidence:.0f}%")
+                        self._process_signal(signal)
+            except Exception as e:
+                logger.debug(f"[EMERGING SCAN] {symbol}: {e}")
+
+    # ── Signal Processing ─────────────────────────────────────────────────────
 
     def _process_signal(self, signal: Signal):
         ok, reason = self.risk.can_trade_symbol(signal.symbol, signal.market)
         if not ok:
             logger.debug(f"[SKIP] {signal.symbol} {signal.market}: {reason}")
             return
+
+        # ── Filtro Sentiment ─────────────────────────────────────────────────
+        try:
+            if signal.side == "buy":
+                ok_s, reason_s = self._sentiment.should_trade_long(signal.symbol)
+            else:
+                ok_s, reason_s = self._sentiment.should_trade_short(signal.symbol)
+
+            if not ok_s:
+                logger.debug(f"[SENTIMENT SKIP] {signal.symbol}: {reason_s}")
+                return
+
+            # Applica modifier sentiment alla confidence
+            modifier = self._sentiment.confidence_modifier(signal.side)
+            signal.confidence = min(100, signal.confidence * modifier)
+            if modifier != 1.0:
+                logger.debug(f"[SENTIMENT] Confidence {signal.symbol} modifier={modifier:.2f}x → {signal.confidence:.0f}%")
+        except Exception:
+            pass   # sentiment non blocca mai il bot
 
         min_conf = 65 if settings.IS_LIVE else 55
         if signal.confidence < min_conf:
@@ -261,7 +349,7 @@ class TradingBot:
             "market":      signal.market,
             "side":        signal.side,
             "strategy":    signal.strategy,
-            "confidence":  signal.confidence,
+            "confidence":  round(signal.confidence, 1),
             "entry":       signal.entry,
             "stop_loss":   signal.stop_loss,
             "take_profit": signal.take_profit,
@@ -284,7 +372,6 @@ class TradingBot:
             "confidence":  signal.confidence,
         }
         self.risk.register_open(signal.symbol, trade_data, signal.market)
-
         self.db.save_trade_open(
             order_id    = order_id,
             symbol      = signal.symbol,
@@ -301,7 +388,6 @@ class TradingBot:
             timeframe   = signal.timeframe,
             leverage    = settings.DEFAULT_LEVERAGE if signal.market == "futures" else 1,
         )
-
         self.notifier.trade_opened(
             symbol      = signal.symbol,
             side        = signal.side,
@@ -314,7 +400,7 @@ class TradingBot:
             confidence  = signal.confidence,
         )
 
-    # --- Position Monitoring -------------------------------------------------
+    # ── Position Monitoring ───────────────────────────────────────────────────
 
     def _monitor_positions(self):
         for trade in self.risk.all_open_trades():
@@ -323,15 +409,12 @@ class TradingBot:
             try:
                 ticker        = self.exchange.fetch_ticker(symbol, market)
                 current_price = float(ticker["last"])
-
                 new_sl = self.risk.trailing_stop(trade, current_price)
                 if new_sl != trade.get("stop_loss"):
                     trade["stop_loss"] = new_sl
                     store = self.risk.open_spot if market == "spot" else self.risk.open_futures
                     if symbol in store:
                         store[symbol]["stop_loss"] = new_sl
-                    logger.debug(f"Trailing stop aggiornato {symbol}: {new_sl:.4f}")
-
                 should_close, reason = self.risk.should_close(trade, current_price)
                 if should_close:
                     self._close_position(symbol, market, trade, current_price, reason)
@@ -341,15 +424,11 @@ class TradingBot:
     def _close_position(self, symbol: str, market: str, trade: dict,
                         exit_price: float, reason: str):
         close_side = "sell" if trade["side"] == "buy" else "buy"
-
         order = self.exchange.create_market_order(
-            symbol = symbol,
-            side   = close_side,
-            amount = trade["size"],
+            symbol = symbol, side = close_side, amount = trade["size"],
             market = market,
             params = {"reduceOnly": True} if market == "futures" else {},
         )
-
         if not order and settings.IS_LIVE:
             logger.error(f"Chiusura fallita per {symbol}")
             return
@@ -361,30 +440,18 @@ class TradingBot:
 
         self.risk.register_close(symbol, pnl_pct, market)
         self.db.save_trade_close(
-            order_id   = trade["order_id"],
-            exit_price = exit_price,
-            pnl_pct    = pnl_pct,
-            pnl_usdt   = pnl_usdt,
-            reason     = reason,
+            order_id=trade["order_id"], exit_price=exit_price,
+            pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
         )
         self.notifier.trade_closed(
-            symbol     = symbol,
-            side       = trade["side"],
-            entry      = entry,
-            exit_price = exit_price,
-            pnl_pct    = pnl_pct,
-            pnl_usdt   = pnl_usdt,
-            reason     = reason,
-            market     = market,
+            symbol=symbol, side=trade["side"], entry=entry,
+            exit_price=exit_price, pnl_pct=pnl_pct, pnl_usdt=pnl_usdt,
+            reason=reason, market=market,
         )
-
         emoji = "✅" if pnl_pct > 0 else "❌"
-        logger.info(
-            f"{emoji} CHIUSO {symbol} {market} | {reason.upper()} | "
-            f"pnl={pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)"
-        )
+        logger.info(f"{emoji} CHIUSO {symbol} {market} | {reason.upper()} | pnl={pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)")
 
-    # --- Utilities -----------------------------------------------------------
+    # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _sync_balance(self):
         try:
@@ -393,7 +460,7 @@ class TradingBot:
             total = spot_bal + futures_bal
             self.risk.session_start_balance = total
             self.risk.peak_balance          = total
-            logger.info(f"Balance -- Spot: {spot_bal:.2f} USDT | Futures: {futures_bal:.2f} USDT | Totale: {total:.2f} USDT")
+            logger.info(f"Balance — Spot: {spot_bal:.2f} | Futures: {futures_bal:.2f} | Totale: {total:.2f} USDT")
         except Exception as e:
             logger.warning(f"_sync_balance: {e}")
 
@@ -403,9 +470,12 @@ class TradingBot:
             futures_bal = self.exchange.get_usdt_balance("futures") if "futures" in settings.MARKET_TYPES else 0
             positions   = len(self.risk.all_open_trades())
             stats       = self.risk.stats()
+            sentiment   = self._sentiment.get_sentiment()
+
             logger.info(
                 f"[HEALTH] Spot={spot_bal:.2f} | Futures={futures_bal:.2f} | "
-                f"Posizioni={positions} | DailyPnL={stats.get('daily_pnl', 0):+.2f}%"
+                f"Pos={positions} | DailyPnL={stats.get('daily_pnl',0):+.2f}% | "
+                f"Sentiment={sentiment['label']}({sentiment['score']})"
             )
             total = spot_bal + futures_bal
             if total > self.risk.peak_balance:
@@ -427,9 +497,9 @@ class TradingBot:
             self.notifier.daily_report(stats, spot_bal, futures_bal)
             if db_stats:
                 logger.info(
-                    f"[DAILY] trades={db_stats.get('trades', 0)} "
-                    f"win_rate={db_stats.get('win_rate', 0):.1f}% "
-                    f"pnl={db_stats.get('total_pnl', 0):+.2f} USDT"
+                    f"[DAILY] trades={db_stats.get('trades',0)} "
+                    f"win_rate={db_stats.get('win_rate',0):.1f}% "
+                    f"pnl={db_stats.get('total_pnl',0):+.2f} USDT"
                 )
         except Exception as e:
             logger.error(f"_daily_report: {e}")
@@ -443,7 +513,7 @@ class TradingBot:
         return pairs
 
 
-# --- Entrypoint --------------------------------------------------------------
+# ── Entrypoint ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     bot = TradingBot()
