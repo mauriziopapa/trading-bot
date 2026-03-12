@@ -38,6 +38,11 @@ _FIELD_TYPES: dict[str, type] = {
     "ENABLE_BREAKOUT":       bool,
     "ENABLE_SCALPING":       bool,
     "ENABLE_EMERGING":       bool,
+    "SENTIMENT_BYPASS":       bool,
+    "FEAR_GREED_LONG_MIN":    float,
+    "FEAR_GREED_LONG_MAX":    float,
+    "FEAR_GREED_SHORT_MIN":   float,
+    "FEAR_GREED_SHORT_MAX":   float,
 }
 _RUNTIME_FIELDS = set(_FIELD_TYPES.keys())
 
