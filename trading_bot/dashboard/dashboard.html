@@ -485,6 +485,41 @@
         </div>
 
         <div class="config-section">
+          <div class="config-section-title">Filtro Sentiment</div>
+          <div class="cfg-toggle-row" style="padding-bottom:12px">
+            <div>
+              <div class="cfg-toggle-label">Bypass Sentiment 🧪</div>
+              <div class="cfg-toggle-desc">Disabilita filtro Fear & Greed (per test)</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="togSentBypass" onchange="onCfgChange()"><span class="toggle-slider"></span></label>
+          </div>
+          <div class="config-grid" id="sentRangeFields">
+            <div class="cfg-field">
+              <label class="cfg-label">F&G min LONG <span class="cfg-hint" id="hintFgLongMin">0</span></label>
+              <input class="cfg-input" id="cfgFgLongMin" type="number" min="0" max="100" step="5" value="0" oninput="onCfgChange()">
+            </div>
+            <div class="cfg-field">
+              <label class="cfg-label">F&G max LONG <span class="cfg-hint" id="hintFgLongMax">80</span></label>
+              <input class="cfg-input" id="cfgFgLongMax" type="number" min="0" max="100" step="5" value="80" oninput="onCfgChange()">
+            </div>
+            <div class="cfg-field">
+              <label class="cfg-label">F&G min SHORT <span class="cfg-hint" id="hintFgShortMin">20</span></label>
+              <input class="cfg-input" id="cfgFgShortMin" type="number" min="0" max="100" step="5" value="20" oninput="onCfgChange()">
+            </div>
+            <div class="cfg-field">
+              <label class="cfg-label">F&G max SHORT <span class="cfg-hint" id="hintFgShortMax">100</span></label>
+              <input class="cfg-input" id="cfgFgShortMax" type="number" min="0" max="100" step="5" value="100" oninput="onCfgChange()">
+            </div>
+          </div>
+          <div style="margin-top:8px;padding:8px 10px;border-radius:5px;background:var(--yellow-bg);border:1px solid var(--yellow);font-size:10px;color:var(--yellow)" id="sentBypassWarning" style="display:none">
+            ⚠️ Bypass attivo — il bot ignora Fear & Greed e opera in qualsiasi condizione di mercato
+          </div>
+          <div style="margin-top:8px;padding:8px 10px;border-radius:5px;background:var(--blue-bg);border:1px solid var(--blue);font-size:10px;color:var(--blue)" id="sentRangeInfo">
+            ℹ️ F&G attuale: <strong id="sentFgLive">—</strong> · LONG apre se F&G in [<span id="sentFgLongRange">0–80</span>] · SHORT apre se F&G in [<span id="sentFgShortRange">20–100</span>]
+          </div>
+        </div>
+
+        <div class="config-section">
           <div class="config-section-title">Mercati & Posizioni</div>
           <div class="config-grid">
             <div class="cfg-field">
@@ -748,6 +783,9 @@ function renderSentiment(s) {
   arc.setAttribute('stroke-dashoffset', 100 - score);
   arc.setAttribute('stroke', score < 25 ? '#CE2C31' : score < 45 ? '#AD5700' : score < 55 ? '#006ADC' : score < 75 ? '#AD5700' : '#CE2C31');
   document.getElementById('gaugeNum').textContent = score;
+  // Aggiorna F&G live nel pannello config
+  const fgLive = document.getElementById('sentFgLive');
+  if (fgLive) fgLive.textContent = (s.fear_greed != null ? s.fear_greed : score) + ' (' + (s.fear_greed_label || s.label) + ')';
   document.getElementById('gaugeNum').style.color =
     score < 25 ? 'var(--red)' : score > 75 ? 'var(--red)' : score < 45 || score > 55 ? 'var(--yellow)' : 'var(--blue)';
   document.getElementById('sentLabel').textContent = s.label || '—';
@@ -837,18 +875,41 @@ function applyPreset(name) {
 }
 
 function onCfgChange() {
-  updateHints(); updateRiskMeter();
+  updateHints(); updateRiskMeter(); updateSentimentUI();
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active-preset'));
   document.getElementById('cfgPresetLabel').textContent = 'personalizzata';
 }
 
 function updateHints() {
-  document.getElementById('hintRisk').textContent     = document.getElementById('cfgRisk').value + '%';
-  document.getElementById('hintLev').textContent      = document.getElementById('cfgLeverage').value + 'x';
-  document.getElementById('hintDailyLoss').textContent= document.getElementById('cfgDailyLoss').value + '%';
-  document.getElementById('hintDrawdown').textContent = document.getElementById('cfgDrawdown').value + '%';
-  document.getElementById('hintTp').textContent       = document.getElementById('cfgTpRatio').value + '×';
-  document.getElementById('hintTrail').textContent    = document.getElementById('cfgTrailing').value + '%';
+  document.getElementById('hintRisk').textContent      = document.getElementById('cfgRisk').value + '%';
+  document.getElementById('hintLev').textContent       = document.getElementById('cfgLeverage').value + 'x';
+  document.getElementById('hintDailyLoss').textContent = document.getElementById('cfgDailyLoss').value + '%';
+  document.getElementById('hintDrawdown').textContent  = document.getElementById('cfgDrawdown').value + '%';
+  document.getElementById('hintTp').textContent        = document.getElementById('cfgTpRatio').value + '×';
+  document.getElementById('hintTrail').textContent     = document.getElementById('cfgTrailing').value + '%';
+  document.getElementById('hintFgLongMin').textContent  = document.getElementById('cfgFgLongMin').value;
+  document.getElementById('hintFgLongMax').textContent  = document.getElementById('cfgFgLongMax').value;
+  document.getElementById('hintFgShortMin').textContent = document.getElementById('cfgFgShortMin').value;
+  document.getElementById('hintFgShortMax').textContent = document.getElementById('cfgFgShortMax').value;
+}
+
+function updateSentimentUI() {
+  const bypass  = document.getElementById('togSentBypass').checked;
+  const warning = document.getElementById('sentBypassWarning');
+  const fields  = document.getElementById('sentRangeFields');
+  const info    = document.getElementById('sentRangeInfo');
+  warning.style.display = bypass ? 'block' : 'none';
+  fields.style.opacity  = bypass ? '0.4' : '1';
+  fields.style.pointerEvents = bypass ? 'none' : 'auto';
+  // Aggiorna range display
+  const lMin = document.getElementById('cfgFgLongMin').value;
+  const lMax = document.getElementById('cfgFgLongMax').value;
+  const sMin = document.getElementById('cfgFgShortMin').value;
+  const sMax = document.getElementById('cfgFgShortMax').value;
+  const lr = document.getElementById('sentFgLongRange');
+  const sr = document.getElementById('sentFgShortRange');
+  if (lr) lr.textContent  = lMin + '–' + lMax;
+  if (sr) sr.textContent  = sMin + '–' + sMax;
 }
 
 function updateRiskMeter() {
@@ -879,8 +940,16 @@ function _populateFormFromConfig(cfg) {
   if (cfg.ENABLE_SCALPING   != null) document.getElementById('togScalping').checked  = cfg.ENABLE_SCALPING;
   if (cfg.ENABLE_EMERGING   != null) document.getElementById('togEmerging').checked  = cfg.ENABLE_EMERGING;
 
+  // Sentiment
+  if (cfg.SENTIMENT_BYPASS     != null) document.getElementById('togSentBypass').checked = cfg.SENTIMENT_BYPASS;
+  if (cfg.FEAR_GREED_LONG_MIN  != null) document.getElementById('cfgFgLongMin').value   = cfg.FEAR_GREED_LONG_MIN;
+  if (cfg.FEAR_GREED_LONG_MAX  != null) document.getElementById('cfgFgLongMax').value   = cfg.FEAR_GREED_LONG_MAX;
+  if (cfg.FEAR_GREED_SHORT_MIN != null) document.getElementById('cfgFgShortMin').value  = cfg.FEAR_GREED_SHORT_MIN;
+  if (cfg.FEAR_GREED_SHORT_MAX != null) document.getElementById('cfgFgShortMax').value  = cfg.FEAR_GREED_SHORT_MAX;
+
   updateHints();
   updateRiskMeter();
+  updateSentimentUI();
 
   // Badge sorgente DB
   const badge  = document.getElementById('cfgSourceBadge');
@@ -915,21 +984,27 @@ function onConfigUpdated(data) {
 // ── Config helpers ────────────────────────────────────
 function _readFormCfg() {
   return {
-    MAX_RISK_PCT:          parseFloat(document.getElementById('cfgRisk').value),
-    DEFAULT_LEVERAGE:      parseInt(document.getElementById('cfgLeverage').value),
-    MAX_DAILY_LOSS_PCT:    parseFloat(document.getElementById('cfgDailyLoss').value),
-    MAX_DRAWDOWN_PCT:      parseFloat(document.getElementById('cfgDrawdown').value),
-    TAKE_PROFIT_RATIO:     parseFloat(document.getElementById('cfgTpRatio').value),
-    TRAILING_STOP_PCT:     parseFloat(document.getElementById('cfgTrailing').value),
-    MIN_CONFIDENCE:        parseFloat(document.getElementById('cfgMinConf').value),
-    MAX_POSITIONS_SPOT:    parseInt(document.getElementById('cfgMaxSpot').value),
-    MAX_POSITIONS_FUTURES: parseInt(document.getElementById('cfgMaxFutures').value),
-    MARGIN_MODE:           document.getElementById('cfgMarginMode').value,
-    ENABLE_RSI_MACD:       document.getElementById('togRsiMacd').checked,
-    ENABLE_BOLLINGER:      document.getElementById('togBollinger').checked,
-    ENABLE_BREAKOUT:       document.getElementById('togBreakout').checked,
-    ENABLE_SCALPING:       document.getElementById('togScalping').checked,
-    ENABLE_EMERGING:       document.getElementById('togEmerging').checked,
+    MAX_RISK_PCT:           parseFloat(document.getElementById('cfgRisk').value),
+    DEFAULT_LEVERAGE:       parseInt(document.getElementById('cfgLeverage').value),
+    MAX_DAILY_LOSS_PCT:     parseFloat(document.getElementById('cfgDailyLoss').value),
+    MAX_DRAWDOWN_PCT:       parseFloat(document.getElementById('cfgDrawdown').value),
+    TAKE_PROFIT_RATIO:      parseFloat(document.getElementById('cfgTpRatio').value),
+    TRAILING_STOP_PCT:      parseFloat(document.getElementById('cfgTrailing').value),
+    MIN_CONFIDENCE:         parseFloat(document.getElementById('cfgMinConf').value),
+    MAX_POSITIONS_SPOT:     parseInt(document.getElementById('cfgMaxSpot').value),
+    MAX_POSITIONS_FUTURES:  parseInt(document.getElementById('cfgMaxFutures').value),
+    MARGIN_MODE:            document.getElementById('cfgMarginMode').value,
+    ENABLE_RSI_MACD:        document.getElementById('togRsiMacd').checked,
+    ENABLE_BOLLINGER:       document.getElementById('togBollinger').checked,
+    ENABLE_BREAKOUT:        document.getElementById('togBreakout').checked,
+    ENABLE_SCALPING:        document.getElementById('togScalping').checked,
+    ENABLE_EMERGING:        document.getElementById('togEmerging').checked,
+    // Sentiment
+    SENTIMENT_BYPASS:       document.getElementById('togSentBypass').checked,
+    FEAR_GREED_LONG_MIN:    parseFloat(document.getElementById('cfgFgLongMin').value),
+    FEAR_GREED_LONG_MAX:    parseFloat(document.getElementById('cfgFgLongMax').value),
+    FEAR_GREED_SHORT_MIN:   parseFloat(document.getElementById('cfgFgShortMin').value),
+    FEAR_GREED_SHORT_MAX:   parseFloat(document.getElementById('cfgFgShortMax').value),
   };
 }
 
@@ -1062,6 +1137,7 @@ connect();
 setInterval(() => { if(!wsConn || wsConn.readyState !== WebSocket.OPEN) pollREST(); }, 5000);
 updateHints();
 updateRiskMeter();
+updateSentimentUI();
 
 // ═══════════════════════════════════════════════════════
 // FIX 2: fetch /api/config immediata al load della pagina.
