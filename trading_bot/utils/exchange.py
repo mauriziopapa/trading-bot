@@ -22,8 +22,8 @@ class BitgetExchange:
     def __init__(self):
         common_config = {
             "apiKey":    settings.BITGET_API_KEY,
-            "secret":    settings.BITGET_SECRET,
-            "password":  settings.BITGET_PASSPHRASE,   # obbligatorio su Bitget
+            "secret":    settings.BITGET_API_SECRET,
+            "password":  settings.BITGET_API_PASSPHRASE,   # obbligatorio su Bitget
             "enableRateLimit": True,
             "rateLimit": 200,                           # ms tra richieste
         }
