@@ -192,35 +192,65 @@ class TradingBot:
         except: pass
         return 0.0
 
+    def _track_signal(self, signal, executed=False, skip_reason=""):
+        """Traccia TUTTI i segnali generati — eseguiti e skippati — per la dashboard."""
+        self._recent_signals.append({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "symbol": signal.symbol, "market": signal.market,
+            "side": signal.side, "strategy": signal.strategy,
+            "confidence": round(signal.confidence, 1),
+            "entry": signal.entry, "stop_loss": signal.stop_loss,
+            "take_profit": signal.take_profit, "executed": executed,
+            "skip_reason": skip_reason,
+        })
+        self._recent_signals = self._recent_signals[-50:]
+
     def _process_signal(self, signal, risk_multiplier=1.0):
         if signal.market == "spot" and signal.side == "sell": return
         ok, reason = self.risk.can_trade_symbol(signal.symbol, signal.market)
-        if not ok: return
-        if not self.risk.reserve_symbol(signal.symbol): return
+        if not ok:
+            self._track_signal(signal, False, reason)
+            return
+        if not self.risk.reserve_symbol(signal.symbol):
+            self._track_signal(signal, False, "pending")
+            return
         try: self._execute_signal(signal, risk_multiplier)
         except Exception as e: logger.error(f"[SIG] {signal.symbol}: {e}")
         finally: self.risk.release_symbol(signal.symbol)
 
     def _execute_signal(self, signal, risk_multiplier=1.0):
         try:
-            ok_s, _ = (self._sentiment.should_trade_long if signal.side=="buy" else self._sentiment.should_trade_short)(signal.symbol)
-            if not ok_s: return
+            ok_s, reason_s = (self._sentiment.should_trade_long if signal.side=="buy" else self._sentiment.should_trade_short)(signal.symbol)
+            if not ok_s:
+                self._track_signal(signal, False, f"sentiment: {reason_s[:30]}")
+                return
             signal.confidence = min(100, signal.confidence * self._sentiment.confidence_modifier(signal.side))
         except: pass
-        if signal.confidence < settings.MIN_CONFIDENCE: return
+        if signal.confidence < settings.MIN_CONFIDENCE:
+            self._track_signal(signal, False, f"conf {signal.confidence:.0f}%<{settings.MIN_CONFIDENCE:.0f}%")
+            return
         bal = self.exchange.get_usdt_balance(signal.market)
-        if bal < 10: return
+        if bal < 10:
+            self._track_signal(signal, False, f"bal {bal:.0f}<10")
+            return
         size = self.risk.position_size(balance=bal, entry=signal.entry, stop_loss=signal.stop_loss, atr=signal.atr, market=signal.market, risk_multiplier=risk_multiplier, symbol=signal.symbol)
-        if size <= 0: return
-        if size < self.exchange.get_min_order_size(signal.symbol, signal.market): return
-        if size * signal.entry < self.exchange.get_min_notional(signal.symbol, signal.market): return
+        if size <= 0:
+            self._track_signal(signal, False, "size=0")
+            return
+        if size < self.exchange.get_min_order_size(signal.symbol, signal.market):
+            self._track_signal(signal, False, "min_size")
+            return
+        if size * signal.entry < self.exchange.get_min_notional(signal.symbol, signal.market):
+            self._track_signal(signal, False, "min_notional")
+            return
         logger.info(f"SEGNALE {signal.strategy} | {signal.symbol} {signal.market} {signal.side.upper()} conf={signal.confidence:.0f}%")
         params = {"reduceOnly": False, "marginMode": settings.MARGIN_MODE} if signal.market == "futures" else {}
         order = self.exchange.create_market_order(symbol=signal.symbol, side=signal.side, amount=size, market=signal.market, params=params)
-        if not order: return
+        if not order:
+            self._track_signal(signal, False, "order_failed")
+            return
         oid = order.get("id", f"unk_{int(time.time())}")
-        self._recent_signals.append({"ts":datetime.now(timezone.utc).isoformat(),"symbol":signal.symbol,"market":signal.market,"side":signal.side,"strategy":signal.strategy,"confidence":round(signal.confidence,1),"entry":signal.entry,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit,"executed":True})
-        self._recent_signals = self._recent_signals[-50:]
+        self._track_signal(signal, True)
         td = {"order_id":oid,"side":signal.side,"entry":signal.entry,"size":size,"stop_loss":signal.stop_loss,"take_profit":signal.take_profit,"strategy":signal.strategy,"confidence":signal.confidence,"atr":signal.atr}
         self.risk.register_open(signal.symbol, td, signal.market)
         self.db.save_trade_open(order_id=oid,symbol=signal.symbol,market=signal.market,strategy=signal.strategy,side=signal.side,entry=signal.entry,size=size,stop_loss=signal.stop_loss,take_profit=signal.take_profit,confidence=signal.confidence,atr=signal.atr,notes=signal.notes,timeframe=signal.timeframe,leverage=settings.DEFAULT_LEVERAGE if signal.market=="futures" else 1)
