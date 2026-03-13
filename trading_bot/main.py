@@ -164,6 +164,10 @@ class TradingBot:
         for c in coins:
             sym = f"{c['symbol']}/USDT"; sc = c.get("score",0); chg = c.get("price_change_24h",0); srg = c.get("volume_surge",1)
             try:
+                # FIX BUG 1: Verifica che il simbolo esista su Bitget PRIMA di tutto
+                if not self.exchange.is_valid_symbol(sym, "spot"):
+                    logger.debug(f"[EMERGING SKIP] {sym} non esiste su Bitget spot")
+                    continue
                 sp = self._check_spread(sym, "spot")
                 if sp > ems: continue
                 df = ohlcv_to_df(self.exchange.fetch_ohlcv(sym, settings.TF_SWING, 100, "spot"))
@@ -282,7 +286,7 @@ class TradingBot:
         entry = trade["entry"]; mult = settings.DEFAULT_LEVERAGE if mkt=="futures" else 1
         pnl_pct = ((exit_p-entry)/entry*100*mult) * (1 if trade["side"]=="buy" else -1)
         pnl_usdt = trade["size"]*entry*(pnl_pct/100)
-        self.risk.register_close(sym, pnl_pct, mkt)
+        self.risk.register_close(sym, pnl_pct, mkt, reason=reason)
         self.db.save_trade_close(order_id=trade["order_id"], exit_price=exit_p, pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason)
         self.notifier.trade_closed(symbol=sym, side=trade["side"], entry=entry, exit_price=exit_p, pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason, market=mkt)
         logger.info(f"{'✅' if pnl_pct>0 else '❌'} CHIUSO {sym} {mkt} | {reason} | {pnl_pct:+.2f}%")
