@@ -206,7 +206,8 @@ class RiskManager:
             risk_pct *= 0.50
 
         risk_pct *= self._correlation_discount(symbol, market)
-        risk_pct = min(risk_pct, 0.10)
+        # Cap assoluto — 15% per permettere full exposure mode
+        risk_pct = min(risk_pct, 0.15)
 
         if atr is not None and entry > 0:
             atr_pct = atr / entry
@@ -228,7 +229,13 @@ class RiskManager:
         else:
             size = size / entry
 
-        MAX_NOTIONAL_PCT = 0.40
+        # MAX_NOTIONAL_PCT configurabile dal DB — default 40%
+        # Per "full exposure" si alza a 80-90%
+        try:
+            MAX_NOTIONAL_PCT = float(getattr(settings, 'MAX_NOTIONAL_PCT', 40)) / 100
+        except Exception:
+            MAX_NOTIONAL_PCT = 0.40
+        MAX_NOTIONAL_PCT = max(0.10, min(0.95, MAX_NOTIONAL_PCT))  # clamp 10-95%
         MIN_NOTIONAL_USDT = 6.0
 
         if market == "futures":
