@@ -106,6 +106,14 @@ def write_state(bot) -> None:
             "emerging":   emerging_data[:8],
         }
 
+        # ── Regime state (per dashboard) ─────────────────────────────────
+        try:
+            regime = getattr(bot, "_regime", None)
+            if regime:
+                state["regime"] = regime.get_state()
+        except Exception:
+            pass
+
         # ── FIX CRITICO: Atomic write ────────────────────────────────────
         # Scrivi su un file temporaneo nella stessa directory, poi rinomina.
         # os.rename() è atomico su Linux (stesso filesystem).

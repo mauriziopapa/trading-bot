@@ -1,7 +1,11 @@
 """
-Dashboard Server — FastAPI + WebSocket
-Serve la UI e fa push dello stato ogni 3 secondi.
-Include /api/config per aggiornare la configurazione del bot a runtime.
+Dashboard Server v4 — FastAPI + WebSocket + Regime Detection
+═══════════════════════════════════════════════════════════════
+Aggiunto:
+  ✓ /api/regime — stato regime attuale
+  ✓ Override manuale: quando l'utente applica una config,
+    il regime detector blocca auto-switch per 2h
+  ✓ Regime state incluso nel push WS
 """
 
 import os
@@ -19,9 +23,7 @@ app = FastAPI(title="Bitget Bot Dashboard")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
 _DIR       = os.path.dirname(__file__)
@@ -34,7 +36,7 @@ HTML_FILE  = os.path.join(_DIR, "dashboard.html")
 # ════════════════════════════════════════════════════════════════════════════
 
 class ConfigPayload(BaseModel):
-    MAX_RISK_PCT:           float = Field(3.5,  ge=0.5,  le=10.0)
+    MAX_RISK_PCT:           float = Field(3.5,  ge=0.5,  le=15.0)
     DEFAULT_LEVERAGE:       int   = Field(5,    ge=1,    le=20)
     MAX_DAILY_LOSS_PCT:     float = Field(8.0,  ge=1.0,  le=30.0)
     MAX_DRAWDOWN_PCT:       float = Field(15.0, ge=5.0,  le=50.0)
@@ -44,6 +46,7 @@ class ConfigPayload(BaseModel):
     MAX_POSITIONS_SPOT:     int   = Field(4,    ge=1,    le=10)
     MAX_POSITIONS_FUTURES:  int   = Field(3,    ge=1,    le=10)
     MARGIN_MODE:            str   = Field("isolated")
+    MAX_NOTIONAL_PCT:       float = Field(40.0, ge=10.0, le=95.0)
     ENABLE_RSI_MACD:        bool  = True
     ENABLE_BOLLINGER:       bool  = True
     ENABLE_BREAKOUT:        bool  = True
@@ -60,35 +63,22 @@ class ConfigPayload(BaseModel):
         extra = "ignore"
 
 
-# ── Config I/O — SEMPRE DAL DB tramite settings ───────────────────────────────
+# ── Config I/O ────────────────────────────────────────────────────────────────
 
 def _read_config() -> dict:
-    """
-    Legge la config SEMPRE dal DB (force refresh).
-    FIX: 'if data:' era falsy con {} — usava i default Pydantic anche col DB pieno.
-    FIX: force=True garantisce lettura fresca dal DB, non dalla cache TTL.
-    """
     try:
         from trading_bot.config import settings as S
-        # force=True: salta la cache TTL e rilegge dal DB ora
-        data = S.as_dict(force=True)   # forza lettura fresca dal DB
-        # FIX: 'if data is not None' invece di 'if data'
-        # {} (cache vuota) è falsy → prima tornava sempre i default Pydantic!
+        data = S.as_dict(force=True)
         if data is not None:
             data["_storage_backend"] = S.storage_backend()
             data["_source"] = "postgresql" if S._db_ok else "memory"
             return data
     except Exception as e:
         logger.warning(f"[CONFIG] _read_config fallito: {e}")
-    # Fallback: solo se settings non importabile (primo avvio senza DB)
     fallback = ConfigPayload().dict()
     fallback["_storage_backend"] = "fallback_defaults"
     fallback["_source"] = "pydantic_defaults"
     return fallback
-
-
-def _write_config(cfg: dict) -> None:
-    pass   # no-op: salvataggio avviene in set_many() sul DB
 
 
 def _apply_to_settings(cfg: dict) -> list[str]:
@@ -96,16 +86,23 @@ def _apply_to_settings(cfg: dict) -> list[str]:
         from trading_bot.config import settings as S
         changed = S.set_many(cfg)
         if changed:
-            backend = S.storage_backend()
             for ch in changed:
                 logger.info(f"[CONFIG LIVE] {ch}")
-            logger.info(f"[CONFIG] Salvato su: {backend}")
-        else:
-            logger.debug("[CONFIG] Nessun campo modificato")
         return changed
     except Exception as e:
         logger.warning(f"[CONFIG] Errore apply: {e}")
         return []
+
+
+def _notify_regime_override():
+    """Notifica il regime detector che l'utente ha applicato manualmente."""
+    try:
+        from trading_bot.main import _bot_ref
+        if _bot_ref and hasattr(_bot_ref, '_regime'):
+            _bot_ref._regime.set_manual_override()
+            logger.info("[REGIME] Override manuale impostato — auto-switch bloccato 2h")
+    except Exception:
+        pass
 
 
 # ── State I/O ─────────────────────────────────────────────────────────────────
@@ -131,7 +128,7 @@ def _demo_state() -> dict:
         "logs":      [{"ts": now, "level": "INFO", "msg": "Dashboard avviata — in attesa del bot..."}],
         "stats":     {"total_trades": 0, "wins": 0, "losses": 0, "win_rate": 0,
                       "avg_win_pct": 0, "avg_loss_pct": 0, "daily_pnl": 0, "daily_trades": 0},
-        "sentiment": None, "emerging": [],
+        "sentiment": None, "emerging": [], "regime": None,
         "config":    _read_config(),
     }
 
@@ -143,33 +140,23 @@ def _demo_state() -> dict:
 class ConnectionManager:
     def __init__(self):
         self.active: list[WebSocket] = []
-
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.active.append(ws)
-
     def disconnect(self, ws: WebSocket):
-        if ws in self.active:
-            self.active.remove(ws)
-
+        if ws in self.active: self.active.remove(ws)
     async def broadcast(self, msg: dict):
         dead = []
         for ws in self.active:
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
-
+            try: await ws.send_json(msg)
+            except: dead.append(ws)
+        for ws in dead: self.disconnect(ws)
 
 manager = ConnectionManager()
-
 
 @app.on_event("startup")
 async def start_pusher():
     asyncio.create_task(_push_loop())
-
 
 async def _push_loop():
     while True:
@@ -185,70 +172,52 @@ async def _push_loop():
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     try:
-        with open(HTML_FILE) as f:
-            return f.read()
+        with open(HTML_FILE) as f: return f.read()
     except FileNotFoundError:
         return "<h1>dashboard.html non trovato</h1>"
-
 
 @app.get("/api/state")
 async def get_state():
     return _read_state()
 
-
 @app.get("/api/config")
 async def get_config():
     return _read_config()
 
-
 @app.post("/api/config")
 async def update_config(request: Request):
-    """
-    Aggiorna SOLO i campi presenti nel payload (merge con DB).
-    FIX: prima usava ConfigPayload con default Pydantic — campi assenti
-    venivano riempiti con i default e sovrascrivevano il DB (es.
-    salvataggio filtri EM_ resettava leva, confidence, ecc.).
-    Ora: legge il DB corrente, applica solo le chiavi presenti nel JSON.
-    """
     try:
         raw = await request.json()
     except Exception:
         raw = {}
 
-    # Legge config corrente dal DB come base (non usa i default Pydantic)
     current = _read_config()
-    # Rimuove metadati interni
     current.pop("_storage_backend", None)
     current.pop("_source", None)
-
-    # Merge: sovrascrive SOLO i campi ricevuti
     merged = {**current, **raw}
 
-    # Valida i campi presenti (solo quelli nel payload) con ConfigPayload
-    # per i vincoli ge/le — ma senza riempire i mancanti
     from pydantic import ValidationError
     try:
-        ConfigPayload(**merged)   # validazione completa sul merged
+        ConfigPayload(**merged)
     except ValidationError as ve:
         return {"ok": False, "error": str(ve)}
 
     changed = _apply_to_settings(merged)
-    applied_live = True
 
-    # Rilegge config aggiornata per il broadcast
+    # ── NUOVO: Notifica regime detector dell'override manuale ────────
+    _notify_regime_override()
+
     updated_cfg = _read_config()
     updated_cfg.pop("_storage_backend", None)
     updated_cfg.pop("_source", None)
 
     await manager.broadcast({
         "type": "config_updated",
-        "data": {"config": updated_cfg, "changed": changed, "applied_live": applied_live}
+        "data": {"config": updated_cfg, "changed": changed, "applied_live": True}
     })
 
-    msg = f"✅ Configurazione applicata live ({len(changed)} campi modificati). Nessun restart necessario."
-    logger.info(f"[CONFIG] {msg}")
-    return {"ok": True, "saved": True, "applied_live": applied_live,
-            "changed": changed, "config": updated_cfg, "message": msg}
+    return {"ok": True, "saved": True, "applied_live": True,
+            "changed": changed, "config": updated_cfg}
 
 
 @app.delete("/api/config")
@@ -256,71 +225,60 @@ async def reset_config():
     try:
         from trading_bot.config import settings as S
         S.reset_runtime()
-        logger.info("[CONFIG] reset_runtime() OK — DB + memory svuotati")
     except Exception as e:
-        logger.warning(f"[CONFIG] reset_runtime parziale: {e}")
-
+        logger.warning(f"[CONFIG] reset: {e}")
     defaults = ConfigPayload().dict()
     await manager.broadcast({
         "type": "config_updated",
         "data": {"config": defaults, "changed": ["RESET"], "applied_live": True}
     })
-    return {"ok": True, "message": "Config resettata — Railway Variables / default attivi", "config": defaults}
+    return {"ok": True, "config": defaults}
+
+
+@app.get("/api/regime")
+async def get_regime():
+    """Stato corrente del regime detector."""
+    try:
+        from trading_bot.main import _bot_ref
+        if _bot_ref and hasattr(_bot_ref, '_regime'):
+            return _bot_ref._regime.get_state()
+    except Exception:
+        pass
+    return {"current_regime": "normal", "current_label": "🚀 Raddoppio ×2", "auto_enabled": True}
 
 
 @app.post("/api/restart")
 async def restart_bot():
-    import sys
     import threading
-
-    logger.warning("[RESTART] Riavvio self-exec richiesto dalla dashboard")
-
-    await manager.broadcast({
-        "type": "restarting",
-        "data": {"message": "Bot in riavvio — riconnessione automatica tra 15-30s"}
-    })
-
+    logger.warning("[RESTART] Richiesto dalla dashboard")
+    await manager.broadcast({"type": "restarting", "data": {"message": "Bot in riavvio..."}})
     def _do_restart():
         import time, os, sys
         time.sleep(1.5)
         try:
-            try:
-                import importlib
-                main_mod = importlib.import_module("trading_bot.main")
-                if hasattr(main_mod, "_bot_ref") and main_mod._bot_ref:
-                    main_mod._bot_ref._running = False
-                    time.sleep(4)
-            except Exception:
-                pass
-            logger.warning(f"[RESTART] os.execv({sys.executable}, {sys.argv})")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         except Exception as e:
-            logger.error(f"[RESTART] execv fallito: {e} — sys.exit(1)")
+            logger.error(f"[RESTART] fallito: {e}")
             sys.exit(1)
-
     threading.Thread(target=_do_restart, daemon=False).start()
-    return {"ok": True, "message": "Riavvio avviato — riconnessione automatica entro 20s", "eta_sec": 20}
+    return {"ok": True, "eta_sec": 20}
 
 
 @app.get("/api/sentiment")
 async def get_sentiment():
-    return _read_state().get("sentiment") or {"score": None, "label": "N/A"}
-
+    return _read_state().get("sentiment") or {"score": None}
 
 @app.get("/api/emerging")
 async def get_emerging():
     return _read_state().get("emerging") or []
-
 
 @app.get("/api/health")
 async def health():
     info = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
     try:
         from trading_bot.config import settings as S
-        info["storage"]     = S.storage_backend()
-        # FIX #3: _db_cache e _file_cache non esistono — il dict si chiama _cache
-        info["config_keys"] = list(S._cache.keys())
-        info["db_ok"]       = S._db_ok
+        info["storage"] = S.storage_backend()
+        info["db_ok"]   = S._db_ok
     except Exception:
         pass
     return info
