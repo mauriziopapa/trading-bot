@@ -52,6 +52,11 @@ _FIELD_TYPES: dict[str, type] = {
     "FEAR_GREED_SHORT_MAX":   float,
     # ── v4: Full exposure ─────────────────────────────────────────────────
     "MAX_NOTIONAL_PCT":       float,   # % max del balance per singolo trade (default 40)
+    # ── v4: Emerging tuning (usati da regime_detector + dashboard) ────────
+    "EMERGING_DIRECT_SCORE":  float,   # soglia score per BUY diretto
+    "EMERGING_MOMENTUM_CHG":  float,   # soglia % change 24h per momentum
+    "EMERGING_RISK_MULT":     float,   # moltiplicatore risk per emerging
+    "EMERGING_MAX_SPREAD":    float,   # max spread % per entrare
 }
 _RUNTIME_FIELDS = set(_FIELD_TYPES.keys())
 
