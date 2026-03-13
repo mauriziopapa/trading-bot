@@ -51,12 +51,15 @@ def _cfg(key: str, default):
 
 
 def _static_symbols() -> set[str]:
-    try:
-        spot    = getattr(settings, "SPOT_SYMBOLS",    []) or []
-        futures = getattr(settings, "FUTURES_SYMBOLS", []) or []
-        return {s.split("/")[0].upper() for s in spot + futures}
-    except Exception:
-        return set()
+    """
+    NON escludere più i simboli già presenti in SPOT/FUTURES.
+    Con AUTO mode, TUTTE le coin liquide sono in SPOT_SYMBOLS
+    e verrebbero escluse → 0 emerging sempre.
+    
+    Ora escludiamo solo le MAJOR (BTC, ETH) che non hanno senso
+    come "emergenti" — il resto va scoperto.
+    """
+    return {"BTC", "ETH"}
 
 
 def _excluded_symbols() -> set[str]:
@@ -105,18 +108,26 @@ class EmergingScanner:
 
         raw: dict[str, dict] = {}
 
-        for coin in self._fetch_coingecko_trending():
-            self._merge(raw, coin)
-        for coin in self._fetch_bitget_gainers(min_vol, min_chg):
-            self._merge(raw, coin)
-        for coin in self._fetch_coingecko_top_gainers():
-            self._merge(raw, coin)
-        for coin in self._fetch_bitget_new_listings():
-            self._merge(raw, coin)
-        for coin in self._fetch_volume_spikes(min_vol):
-            self._merge(raw, coin)
-        for coin in self._fetch_bitget_movers(max(min_chg * 0.5, 1.5)):
-            self._merge(raw, coin)
+        # Log dettagliato per ogni fonte
+        src_counts = {}
+        for name, fetcher, args in [
+            ("CG_trending",    self._fetch_coingecko_trending, ()),
+            ("Bitget_gainers", self._fetch_bitget_gainers, (min_vol, min_chg)),
+            ("CG_top_gainers", self._fetch_coingecko_top_gainers, ()),
+            ("Bitget_new",     self._fetch_bitget_new_listings, ()),
+            ("Vol_spikes",     self._fetch_volume_spikes, (min_vol,)),
+            ("Bitget_movers",  self._fetch_bitget_movers, (max(min_chg * 0.5, 1.0),)),
+        ]:
+            try:
+                coins = fetcher(*args)
+                src_counts[name] = len(coins)
+                for coin in coins:
+                    self._merge(raw, coin)
+            except Exception as e:
+                src_counts[name] = f"ERR: {e}"
+                logger.warning(f"[EMERGING] {name} fallito: {e}")
+
+        logger.info(f"[EMERGING] Fonti: {src_counts} → {len(raw)} candidate pre-filtro")
 
         results = []
         for sym, coin in raw.items():
@@ -200,7 +211,7 @@ class EmergingScanner:
                     f"p90=${sorted_vols[int(n*0.90)]/1e6:.1f}M"
                 )
         except Exception as e:
-            logger.debug(f"[EMERGING] Vol percentiles: {e}")
+            logger.info(f"[EMERGING] Vol percentiles: {e}")
 
     def _calc_surge(self, symbol: str, volume_24h: float) -> float:
         """
@@ -249,7 +260,7 @@ class EmergingScanner:
                 return []
             return self._coingecko_markets_by_ids(ids, source="trending")
         except Exception as e:
-            logger.debug(f"[EMERGING] CG trending: {e}")
+            logger.info(f"[EMERGING] CG trending: {e}")
             return []
 
     def _fetch_coingecko_top_gainers(self) -> list[dict]:
@@ -273,7 +284,7 @@ class EmergingScanner:
             )[:20]
             return [self._norm_cg(c, "cg_gainers") for c in gainers]
         except Exception as e:
-            logger.debug(f"[EMERGING] CG top gainers: {e}")
+            logger.info(f"[EMERGING] CG top gainers: {e}")
             return []
 
     def _fetch_bitget_gainers(self, min_vol: float, min_chg: float) -> list[dict]:
@@ -317,7 +328,7 @@ class EmergingScanner:
                 })
             return out
         except Exception as e:
-            logger.debug(f"[EMERGING] Bitget gainers: {e}")
+            logger.info(f"[EMERGING] Bitget gainers: {e}")
             return []
 
     def _fetch_bitget_new_listings(self) -> list[dict]:
@@ -354,7 +365,7 @@ class EmergingScanner:
                 })
             return out
         except Exception as e:
-            logger.debug(f"[EMERGING] New listings: {e}")
+            logger.info(f"[EMERGING] New listings: {e}")
             return []
 
     def _fetch_volume_spikes(self, min_vol: float) -> list[dict]:
@@ -392,7 +403,7 @@ class EmergingScanner:
                 })
             return out
         except Exception as e:
-            logger.debug(f"[EMERGING] Volume spikes: {e}")
+            logger.info(f"[EMERGING] Volume spikes: {e}")
             return []
 
     def _fetch_bitget_movers(self, min_chg: float) -> list[dict]:
@@ -429,7 +440,7 @@ class EmergingScanner:
             out.sort(key=lambda x: x["price_change_24h"] * x["volume_24h_usd"], reverse=True)
             return out[:25]
         except Exception as e:
-            logger.debug(f"[EMERGING] Bitget movers: {e}")
+            logger.info(f"[EMERGING] Bitget movers: {e}")
             return []
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
