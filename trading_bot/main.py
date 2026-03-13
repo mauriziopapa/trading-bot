@@ -264,21 +264,31 @@ class TradingBot:
                     logger.error(f"[scan_scalping] {symbol} {market}: {e}")
 
     def _scan_emerging(self):
-        """Scansione coin emergenti con due modalità di ingresso:
-        1. DIRETTO (score ≥ 65): ordine market buy immediato, risk 1.5×
-        2. CONFERMATO (score < 65): aspetta conferma RSI/Bollinger come prima
+        """Scansione coin emergenti — tre modalità di ingresso:
+
+        1. MOMENTUM (chg24 > EM_MOMENTUM_CHG, es. 8%): BUY diretto su uptrend forte.
+           Le strategie classiche (RSI/BB) sono inutili su coin in +20% — danno solo
+           segnali SELL (overbought). Il momentum puro è il segnale.
+
+        2. DIRETTO (score ≥ EM_DIRECT_SCORE, es. 55): BUY diretto su score composito alto.
+
+        3. CONFERMATO (score < soglia): aspetta pullback RSI/Bollinger BUY.
+           Solo BUY — SELL su spot è bloccato dal filtro in _process_signal.
         """
         coins = self._emerging.scan()
         if not coins:
             logger.info("[EMERGING SCAN] Nessuna coin emergente trovata")
             return
 
-        logger.info(f"[EMERGING SCAN] {len(coins)} coin — analisi ordini diretti + confermati...")
-        swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
+        em_risk_mult     = float(_cfg_float("EMERGING_RISK_MULT",    1.5))
+        em_direct_score  = float(_cfg_float("EMERGING_DIRECT_SCORE", 55.0))   # era 65 → 55
+        em_momentum_chg  = float(_cfg_float("EMERGING_MOMENTUM_CHG", 8.0))    # % 24h per ordine momentum
 
-        # Moltiplicatore di rischio per emerging (dal DB, default 1.5x)
-        em_risk_mult = float(_cfg_float("EMERGING_RISK_MULT", 1.5))
-        em_direct_score = float(_cfg_float("EMERGING_DIRECT_SCORE", 65.0))
+        logger.info(
+            f"[EMERGING SCAN] {len(coins)} coin | direct_score≥{em_direct_score:.0f} "
+            f"momentum_chg≥{em_momentum_chg:.0f}% risk×{em_risk_mult:.1f}"
+        )
+        swing_strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
 
         for coin in coins:
             symbol  = f"{coin['symbol']}/USDT"
@@ -286,21 +296,55 @@ class TradingBot:
             chg24   = coin.get("price_change_24h", 0)
             sources = coin.get("sources", [])
             is_new  = coin.get("is_new_listing", False)
+            surge   = coin.get("volume_surge", 1.0)
 
             try:
                 df = ohlcv_to_df(
                     self.exchange.fetch_ohlcv(symbol, settings.TF_SWING, 100, "spot")
                 )
                 if len(df) < 20:
-                    logger.info(f"[EMERGING] {symbol} candele insufficienti ({len(df)})")
+                    logger.info(f"[EMERGING] {symbol} dati insufficienti ({len(df)} candele)")
                     continue
 
                 close = float(df["close"].iloc[-1])
                 atr   = float(df["close"].diff().abs().rolling(14).mean().iloc[-1] or close * 0.02)
 
-                # ── MODALITÀ 1: ORDINE DIRETTO se score alto ─────────────────
-                if score >= em_direct_score:
-                    sl_dist = atr * 2.0   # SL più largo per volatilità emerging
+                # ── MODALITÀ 1: MOMENTUM — coin in uptrend forte ──────────────
+                # Bollinger/RSI su una coin in +10%/+20% dà solo SELL (overbought).
+                # Su coin emergenti in momentum il segnale corretto è BUY diretto.
+                if chg24 >= em_momentum_chg:
+                    # SL = 3× ATR (più largo per volatilità alta + dare respiro)
+                    sl_dist     = atr * 3.0
+                    stop_loss   = round(close - sl_dist, 6)
+                    take_profit = round(close + sl_dist * settings.TAKE_PROFIT_RATIO, 6)
+                    conf        = min(50.0 + chg24 * 0.8 + surge * 2, 92.0)
+
+                    sig = Signal(
+                        strategy    = "EMERGING_MOMENTUM",
+                        symbol      = symbol,
+                        market      = "spot",
+                        side        = "buy",
+                        confidence  = conf,
+                        entry       = close,
+                        stop_loss   = stop_loss,
+                        take_profit = take_profit,
+                        atr         = atr,
+                        timeframe   = settings.TF_SWING,
+                        notes       = (
+                            f"MOMENTUM chg={chg24:+.1f}% surge×{surge:.1f} "
+                            f"score={score:.0f} src={','.join(sources)}"
+                            + (" [NEW LISTING]" if is_new else "")
+                        ),
+                    )
+                    logger.info(
+                        f"[EMERGING MOMENTUM] {symbol} chg={chg24:+.1f}% "
+                        f"surge×{surge:.1f} score={score:.0f} conf={conf:.0f}% → BUY"
+                    )
+                    self._process_signal(sig, risk_multiplier=em_risk_mult)
+
+                # ── MODALITÀ 2: DIRETTO — score composito alto ────────────────
+                elif score >= em_direct_score:
+                    sl_dist     = atr * 2.0
                     stop_loss   = round(close - sl_dist, 6)
                     take_profit = round(close + sl_dist * settings.TAKE_PROFIT_RATIO, 6)
 
@@ -309,31 +353,34 @@ class TradingBot:
                         symbol      = symbol,
                         market      = "spot",
                         side        = "buy",
-                        confidence  = min(score, 95.0),
+                        confidence  = min(score, 92.0),
                         entry       = close,
                         stop_loss   = stop_loss,
                         take_profit = take_profit,
                         atr         = atr,
                         timeframe   = settings.TF_SWING,
-                        notes       = f"score={score:.0f} chg={chg24:+.1f}% src={','.join(sources)}"
-                                      + (" [NEW LISTING]" if is_new else ""),
+                        notes       = (
+                            f"DIRECT score={score:.0f} chg={chg24:+.1f}% "
+                            f"src={','.join(sources)}"
+                            + (" [NEW LISTING]" if is_new else "")
+                        ),
                     )
                     logger.info(
-                        f"[EMERGING DIRECT] {symbol} score={score:.0f} chg={chg24:+.1f}% "
-                        f"src={sources} → ordine diretto (risk {em_risk_mult:.1f}×)"
+                        f"[EMERGING DIRECT] {symbol} score={score:.0f} chg={chg24:+.1f}% → BUY"
                     )
                     self._process_signal(sig, risk_multiplier=em_risk_mult)
 
-                # ── MODALITÀ 2: CONFERMATO da strategia ──────────────────────
+                # ── MODALITÀ 3: CONFERMATO — aspetta pullback ─────────────────
                 else:
                     for strategy in swing_strategies:
                         signal = strategy.analyze(df, symbol, "spot")
-                        if signal:
-                            signal.confidence = min(100, signal.confidence * 1.2)  # boost +20%
+                        # Solo BUY — SELL su spot non ha senso (non abbiamo la coin)
+                        if signal and signal.side == "buy":
+                            signal.confidence = min(100, signal.confidence * 1.2)
                             signal.notes += f" | emerging score={score:.0f} chg={chg24:+.1f}%"
                             logger.info(
-                                f"[EMERGING CONF] {symbol} {signal.side.upper()} "
-                                f"conf={signal.confidence:.0f}% score={score:.0f}"
+                                f"[EMERGING CONF] {symbol} BUY conf={signal.confidence:.0f}% "
+                                f"score={score:.0f}"
                             )
                             self._process_signal(signal, risk_multiplier=em_risk_mult * 0.8)
 
