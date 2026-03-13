@@ -122,7 +122,7 @@ def write_state(bot) -> None:
         fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp", prefix=".state_")
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump(state, f)
+                json.dump(state, f, default=str)  # default=str gestisce NaN e altri non-serializzabili
             os.replace(tmp_path, STATE_FILE)  # atomico su stesso fs
         except Exception:
             # Pulizia file temporaneo in caso di errore
