@@ -332,7 +332,7 @@ class RegimeDetector:
             "DD basso":        s["drawdown_pct"] < 3,
             "WR alto":         s["win_rate_recent"] > 58 or s["total_trades"] < 10,
             "Win streak":      s["consecutive_wins"] >= 3 or s["total_trades"] < 5,
-            "Daily PnL +":     s["daily_pnl"] > 3,
+            "Daily PnL +":     s["daily_pnl"] >= 0 if s["total_trades"] < 5 else s["daily_pnl"] > 2,
             "F&G operativo":   20 <= s["fear_greed"] <= 75,
             "Funding ok":      abs(s["funding_avg"]) < 0.08,
             "L/S bilanciato":  0.5 < s["ls_ratio"] < 2.0,
