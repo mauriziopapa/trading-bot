@@ -1,12 +1,16 @@
 """
-State Writer — scrive lo stato completo del bot in JSON
-per la dashboard (ogni minuto via schedule).
-Include: balance, posizioni, segnali, log, sentiment, emerging coins.
+State Writer v3 — Atomic JSON write
+═══════════════════════════════════════════════════════════════
+FIX CRITICO:
+  ✓ Atomic write con tempfile + os.rename per evitare letture corrotte
+    (il dashboard server legge il file mentre il bot ci scrive)
+  ✓ Usa cache emerging/sentiment (no doppia chiamata API)
 """
 
 import json
 import os
 import time
+import tempfile
 from datetime import datetime, timezone
 from loguru import logger
 
@@ -16,13 +20,12 @@ STATE_FILE = os.path.join(os.path.dirname(__file__), "dashboard_state.json")
 def write_state(bot) -> None:
     """
     Serializza lo stato corrente del bot in dashboard_state.json.
-    Chiamata ogni minuto dallo scheduler in main.py.
-    Non solleva mai eccezioni — non deve mai bloccare il bot.
+    FIX: write atomico con tempfile + rename.
     """
     try:
         from trading_bot.config import settings
 
-        # ── Balance ──────────────────────────────────────────────────────────
+        # ── Balance ──────────────────────────────────────────────────────
         spot_bal    = 0.0
         futures_bal = 0.0
         try:
@@ -38,7 +41,7 @@ def write_state(bot) -> None:
         pnl_usdt = total - start
         pnl_pct  = pnl_usdt / start * 100 if start > 0 else 0.0
 
-        # ── Posizioni aperte con PnL live ─────────────────────────────────────
+        # ── Posizioni aperte con PnL live ─────────────────────────────────
         positions = []
         for trade in bot.risk.all_open_trades():
             try:
@@ -63,25 +66,27 @@ def write_state(bot) -> None:
             except Exception:
                 pass
 
-        # ── Sentiment ─────────────────────────────────────────────────────────
+        # ── Sentiment (usa cache — NO doppia chiamata API) ───────────────
         sentiment_data = None
         try:
             analyzer = getattr(bot, "_sentiment", None)
             if analyzer:
+                # get_sentiment() senza force=True usa la cache
                 sentiment_data = analyzer.get_sentiment()
         except Exception:
             pass
 
-        # ── Emerging coins ────────────────────────────────────────────────────
+        # ── Emerging coins (usa cache — NO doppia chiamata API) ──────────
         emerging_data = []
         try:
             scanner = getattr(bot, "_emerging", None)
             if scanner:
+                # scan() senza force=True usa la cache
                 emerging_data = scanner.scan()
         except Exception:
             pass
 
-        # ── Assembla state ────────────────────────────────────────────────────
+        # ── Assembla state ────────────────────────────────────────────────
         state = {
             "mode":        settings.TRADING_MODE,
             "status":      "running",
@@ -101,8 +106,23 @@ def write_state(bot) -> None:
             "emerging":   emerging_data[:8],
         }
 
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
+        # ── FIX CRITICO: Atomic write ────────────────────────────────────
+        # Scrivi su un file temporaneo nella stessa directory, poi rinomina.
+        # os.rename() è atomico su Linux (stesso filesystem).
+        # Questo previene letture di JSON parziali dal dashboard server.
+        dir_path = os.path.dirname(STATE_FILE)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp", prefix=".state_")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp_path, STATE_FILE)  # atomico su stesso fs
+        except Exception:
+            # Pulizia file temporaneo in caso di errore
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     except Exception as e:
         logger.debug(f"[STATE_WRITER] Errore non critico: {e}")
