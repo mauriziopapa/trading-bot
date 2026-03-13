@@ -137,6 +137,12 @@ class TradingBot:
 
         self.exchange.initialize()
         self.db.connect()
+
+        # ── FIX CRITICO: Recupera posizioni aperte dal DB ────────────────
+        # Senza questo, dopo un restart il bot pensa di avere 0 posizioni
+        # e ne apre di nuove → duplicati su Bitget → margine esaurito.
+        self.risk.recover_from_db()
+
         self._sync_balance()
 
         if settings.IS_LIVE:
@@ -426,6 +432,25 @@ class TradingBot:
         if not ok:
             logger.info(f"[SKIP-RISK] {signal.symbol} {signal.market}: {reason}")
             return
+
+        # ── FIX CRITICO: Riserva il simbolo PRIMA di procedere ──────────
+        # Previene che un altro scan apra un ordine sullo stesso base asset
+        # mentre questo è in corso (race condition → duplicati).
+        if not self.risk.reserve_symbol(signal.symbol):
+            logger.info(f"[SKIP-PENDING] {signal.symbol} già riservato da altro scan")
+            return
+
+        try:
+            self._execute_signal(signal, risk_multiplier)
+        except Exception as e:
+            logger.error(f"[SIGNAL ERROR] {signal.symbol}: {e}")
+        finally:
+            # Rilascia la riserva se non è stata convertita in posizione aperta
+            # (register_open fa già discard internamente)
+            self.risk.release_symbol(signal.symbol)
+
+    def _execute_signal(self, signal: Signal, risk_multiplier: float = 1.0):
+        """Logica di esecuzione separata per gestire il finally del reserve."""
 
         # Sentiment filter
         try:
