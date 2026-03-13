@@ -401,6 +401,58 @@ async def get_sentiment():
 async def get_emerging():
     return _read_state().get("emerging") or []
 
+@app.post("/api/force-refresh")
+async def force_refresh():
+    """
+    Forza refresh immediato di: sentiment, emerging, regime, state.
+    Chiamato dal tasto ⚡ Force Refresh sulla dashboard.
+    """
+    result = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+    try:
+        from trading_bot.main import _bot_ref
+        if not _bot_ref:
+            return {"ok": False, "error": "Bot non avviato"}
+
+        bot = _bot_ref
+
+        # 1. Force sentiment refresh
+        try:
+            s = bot._sentiment.get_sentiment(force=True)
+            result["sentiment"] = {"score": s.get("score"), "label": s.get("label")}
+        except Exception as e:
+            result["sentiment_error"] = str(e)
+
+        # 2. Force emerging scan
+        try:
+            coins = bot._emerging.scan(force=True)
+            result["emerging_count"] = len(coins)
+            result["emerging_top"] = [c["symbol"] for c in coins[:5]]
+        except Exception as e:
+            result["emerging_error"] = str(e)
+
+        # 3. Force regime check
+        try:
+            r = bot._regime.evaluate(bot)
+            result["regime"] = r.get("current_label")
+        except Exception as e:
+            result["regime_error"] = str(e)
+
+        # 4. Force state write
+        try:
+            from trading_bot.dashboard.state_writer import write_state
+            write_state(bot)
+            result["state_written"] = True
+        except Exception as e:
+            result["state_error"] = str(e)
+
+        # 5. Broadcast updated state via WS
+        await manager.broadcast({"type": "state", "data": _read_state()})
+
+        logger.info(f"[FORCE REFRESH] Emerging={result.get('emerging_count',0)} Sentiment={result.get('sentiment',{}).get('score','?')}")
+    except Exception as e:
+        result["error"] = str(e)
+    return result
+
 @app.get("/api/health")
 async def health():
     info = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
