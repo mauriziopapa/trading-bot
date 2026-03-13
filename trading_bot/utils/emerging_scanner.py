@@ -71,7 +71,7 @@ class EmergingScanner:
     def __init__(self):
         self._last_scan: list[dict] = []
         self._last_scan_ts: float   = 0.0
-        self._scan_ttl: float       = 600
+        self._scan_ttl: float       = 180   # 3 minuti (era 10 min — troppo lento)
 
         # ── Cache ticker per surge calculation ───────────────────────────
         self._ticker_cache: dict[str, dict] = {}  # symbol → ticker data
