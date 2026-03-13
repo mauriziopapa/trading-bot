@@ -185,6 +185,28 @@ class BitgetExchange:
                 logger.error(f"[ORDER] Spot BUY {symbol} fallito: {e}")
                 return None
 
+        # ── FIX: Spot SELL — verifica balance reale del token ────────────
+        # Bitget detrae le fee dal token comprato (0.1%).
+        # Il bot traccia size=2.907869 ma il balance reale è ~2.904.
+        # Tentare di vendere più di quanto si possiede → loop infinito.
+        if market == "spot" and side == "sell":
+            try:
+                base_asset = symbol.split("/")[0]
+                balance = self.fetch_balance("spot")
+                available = float(balance.get(base_asset, {}).get("free", 0))
+                if available <= 0:
+                    logger.warning(f"[ORDER] Spot SELL {symbol}: 0 {base_asset} disponibili — rimuovo posizione fantasma")
+                    return {"id": f"phantom_close_{int(time.time())}", "status": "closed",
+                            "symbol": symbol, "side": side, "amount": 0, "info": "phantom_removed"}
+                if available < amount * 0.95:
+                    logger.warning(
+                        f"[ORDER] Spot SELL {symbol}: richiesti {amount:.6f} ma disponibili {available:.6f} "
+                        f"({base_asset}) — uso balance reale (fee detratte)"
+                    )
+                    amount = available
+            except Exception as e:
+                logger.warning(f"[ORDER] Balance check {symbol}: {e}")
+
         # ── Tutti gli altri ordini (spot SELL, futures BUY/SELL) ──────────
         try:
             return self._retry(
@@ -194,6 +216,11 @@ class BitgetExchange:
         except Exception as e:
             logger.error(f"[ORDER] {market} {side} {symbol} amount={amount:.6f}: {e}")
             return None
+
+    def is_valid_symbol(self, symbol: str, market: str = "spot") -> bool:
+        """Verifica se un simbolo esiste nei mercati caricati da Bitget."""
+        markets = self._spot_markets if market == "spot" else self._futures_markets
+        return symbol in markets
 
     def create_limit_order(self, symbol: str, side: str, amount: float, price: float,
                            market: str = "spot", params: dict = None) -> dict | None:

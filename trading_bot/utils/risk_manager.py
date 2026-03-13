@@ -77,6 +77,7 @@ class RiskManager:
         self._recent_pnls: list[float] = []
         self._in_recovery: bool  = False
         self._recovery_ts: float = 0.0
+        self._sl_cooldown: dict[str, float] = {}  # base_symbol → timestamp SL
 
     # ─── DB Recovery ─────────────────────────────────────────────────────────
 
@@ -153,11 +154,19 @@ class RiskManager:
 
     def can_trade_symbol(self, symbol: str, market: str = "spot") -> tuple[bool, str]:
         """
-        FIX CRITICO: Check base asset su TUTTI i mercati + pending.
-        Previene duplicati come XRP spot + XRP futures + XRP×3 futures.
+        Check base asset su TUTTI i mercati + pending + SL cooldown.
         """
         base = _normalize_base(symbol)
         with self._lock:
+            # Check SL cooldown (15 min dopo stop loss)
+            sl_ts = self._sl_cooldown.get(base, 0)
+            if sl_ts > 0:
+                elapsed = time.time() - sl_ts
+                if elapsed < 900:  # 15 minuti
+                    remaining = int((900 - elapsed) / 60)
+                    return False, f"SL cooldown {base} ({remaining}min)"
+                else:
+                    self._sl_cooldown.pop(base, None)
             # Check esatto
             store = self.open_spot if market == "spot" else self.open_futures
             if symbol in store:
@@ -320,10 +329,15 @@ class RiskManager:
             f"strat={trade.get('strategy','')} conf={trade.get('confidence',0):.0f}%"
         )
 
-    def register_close(self, symbol, pnl_pct, market="spot"):
+    def register_close(self, symbol, pnl_pct, market="spot", reason=""):
+        base = _normalize_base(symbol)
         with self._lock:
             store = self.open_spot if market == "spot" else self.open_futures
             store.pop(symbol, None)
+            # SL cooldown: 15 min prima di ri-tradare lo stesso simbolo
+            if reason == "stop_loss" or pnl_pct < -1:
+                self._sl_cooldown[base] = time.time()
+                logger.info(f"[RISK] SL cooldown attivato su {base} — 15 min")
         if pnl_pct > 0:
             self.wins += 1; self.total_win_pct += pnl_pct
             self._consecutive_wins += 1; self._consecutive_losses = 0
