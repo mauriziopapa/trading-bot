@@ -290,13 +290,34 @@ class DynamicSettings:
         return [s.strip() for s in os.getenv("MARKET_TYPES", "spot,futures").split(",") if s.strip()]
     @property
     def SPOT_SYMBOLS(self) -> list:
-        return [s.strip() for s in os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").split(",") if s.strip()]
+        raw = os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").strip()
+        if raw.upper() == "AUTO":
+            try:
+                from trading_bot.utils.symbol_discovery import get_discovery
+                return get_discovery().get_spot_symbols()
+            except Exception:
+                return ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        return [s.strip() for s in raw.split(",") if s.strip()]
     @property
     def FUTURES_SYMBOLS(self) -> list:
-        return [s.strip() for s in os.getenv("FUTURES_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT").split(",") if s.strip()]
+        raw = os.getenv("FUTURES_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT").strip()
+        if raw.upper() == "AUTO":
+            try:
+                from trading_bot.utils.symbol_discovery import get_discovery
+                return get_discovery().get_futures_symbols()
+            except Exception:
+                return ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+        return [s.strip() for s in raw.split(",") if s.strip()]
     @property
     def SCALPING_SYMBOLS(self) -> list:
-        return [s.strip() for s in os.getenv("SCALPING_SYMBOLS", "BTC/USDT").split(",") if s.strip()]
+        raw = os.getenv("SCALPING_SYMBOLS", "BTC/USDT").strip()
+        if raw.upper() == "AUTO":
+            try:
+                from trading_bot.utils.symbol_discovery import get_discovery
+                return get_discovery().get_top_by_volume("spot", 6)
+            except Exception:
+                return ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        return [s.strip() for s in raw.split(",") if s.strip()]
     @property
     def TF_SWING(self)    -> str: return os.getenv("TF_SWING",    "15m")
     @property
