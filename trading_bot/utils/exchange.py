@@ -1,7 +1,12 @@
 """
-Bitget Exchange Wrapper
-Gestisce connessioni separate per Spot e Futures (Swap),
-retry automatico, rate limiting e normalizzazione simboli.
+Bitget Exchange Wrapper v3
+═══════════════════════════════════════════════════════════════
+FIX CRITICI:
+  ✓ Market BUY spot: Bitget richiede il prezzo per calcolare il costo.
+    Aggiunta opzione createMarketBuyOrderRequiresPrice=False +
+    fallback: converte amount in cost (amount * price) automaticamente.
+  ✓ Leverage re-sync quando cambia dalla dashboard.
+  ✓ Logging dettagliato sugli errori ordine per debugging.
 """
 
 import ccxt
@@ -11,30 +16,32 @@ from trading_bot.config import settings
 
 
 class BitgetExchange:
-    """
-    Singleton wrapper attorno a ccxt.bitget.
-    Espone metodi unificati per spot e futures.
-    """
-
     RETRY_ATTEMPTS = 3
-    RETRY_DELAY    = 2   # secondi tra retry
+    RETRY_DELAY    = 2
 
     def __init__(self):
         common_config = {
             "apiKey":    settings.BITGET_API_KEY,
             "secret":    settings.BITGET_API_SECRET,
-            "password":  settings.BITGET_API_PASSPHRASE,  # obbligatorio su Bitget
+            "password":  settings.BITGET_API_PASSPHRASE,
             "enableRateLimit": True,
-            "rateLimit": 200,                           # ms tra richieste
+            "rateLimit": 200,
         }
 
-        # Client Spot
+        # ── Client Spot ──────────────────────────────────────────────────
         self.spot = ccxt.bitget({
             **common_config,
-            "options": {"defaultType": "spot"},
+            "options": {
+                "defaultType": "spot",
+                # FIX CRITICO: Bitget spot market BUY richiede il prezzo
+                # per calcolare il costo totale. Con questa opzione a False,
+                # ccxt accetta l'amount direttamente come quantità dell'asset
+                # e lo converte internamente.
+                "createMarketBuyOrderRequiresPrice": False,
+            },
         })
 
-        # Client Futures Perpetui (swap)
+        # ── Client Futures ───────────────────────────────────────────────
         self.futures = ccxt.bitget({
             **common_config,
             "options": {
@@ -45,11 +52,11 @@ class BitgetExchange:
 
         self._spot_markets    = {}
         self._futures_markets = {}
+        self._last_leverage_setup: int = 0  # traccia ultima leva impostata
 
     # ─── Init & Market Loading ────────────────────────────────────────────────
 
     def initialize(self):
-        """Carica i mercati disponibili e configura la leva."""
         logger.info("Inizializzazione exchange Bitget...")
 
         if "spot" in settings.MARKET_TYPES:
@@ -62,22 +69,31 @@ class BitgetExchange:
             self._setup_leverage()
 
     def _setup_leverage(self):
-        """Imposta leva e margin mode per tutti i simboli futures configurati."""
+        """
+        Imposta leva e margin mode per tutti i simboli futures.
+        Chiamata all'init e dal health_check se la leva è cambiata.
+        """
+        current_lev = settings.DEFAULT_LEVERAGE
+        if current_lev == self._last_leverage_setup:
+            return  # già sincronizzata
         for symbol in settings.FUTURES_SYMBOLS:
             try:
                 self.futures.set_leverage(
-                    settings.DEFAULT_LEVERAGE,
+                    current_lev,
                     symbol,
                     params={"marginMode": settings.MARGIN_MODE}
                 )
-                logger.debug(f"Leva {settings.DEFAULT_LEVERAGE}x impostata per {symbol}")
+                logger.debug(f"Leva {current_lev}x impostata per {symbol}")
             except Exception as e:
-                logger.warning(f"Setup leva {symbol}: {e}")
+                # Bitget può dare errore se la leva è già impostata allo stesso valore
+                if "leverage not modified" not in str(e).lower():
+                    logger.warning(f"Setup leva {symbol}: {e}")
+        self._last_leverage_setup = current_lev
+        logger.info(f"[EXCHANGE] Leva sincronizzata: {current_lev}x {settings.MARGIN_MODE}")
 
     # ─── OHLCV ───────────────────────────────────────────────────────────────
 
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 300, market: str = "spot"):
-        """Ritorna candele OHLCV come lista di dict."""
         client = self.spot if market == "spot" else self.futures
         raw = self._retry(client.fetch_ohlcv, symbol, timeframe, limit=limit)
         return [
@@ -106,7 +122,6 @@ class BitgetExchange:
         return float(balance.get("USDT", {}).get("free", 0))
 
     def fetch_positions(self) -> list:
-        """Ritorna tutte le posizioni futures aperte."""
         raw = self._retry(self.futures.fetch_positions)
         return [p for p in raw if float(p.get("contracts", 0)) != 0]
 
@@ -114,13 +129,68 @@ class BitgetExchange:
 
     def create_market_order(self, symbol: str, side: str, amount: float,
                             market: str = "spot", params: dict = None) -> dict | None:
+        """
+        FIX CRITICO: Bitget spot market BUY richiede il costo totale in USDT,
+        non la quantità dell'asset. Con createMarketBuyOrderRequiresPrice=False,
+        ccxt converte automaticamente. Ma come fallback aggiuntivo:
+        - Se side=buy e market=spot, passiamo anche il prezzo nel params
+          per sicurezza su tutte le versioni di ccxt.
+        """
         if not settings.IS_LIVE:
             logger.info(f"[PAPER] {market.upper()} {side.upper()} {amount:.6f} {symbol}")
             return {"id": f"paper_{int(time.time())}", "status": "closed",
                     "symbol": symbol, "side": side, "amount": amount}
 
         client = self.spot if market == "spot" else self.futures
-        return self._retry(client.create_market_order, symbol, side, amount, params=params or {})
+        order_params = dict(params or {})
+
+        # ── FIX: Spot market BUY — passa il costo in USDT ────────────────
+        # Bitget spot market BUY vuole sapere QUANTO USDT spendere,
+        # non quanti token comprare. Recuperiamo il prezzo corrente
+        # e convertiamo amount → cost.
+        if market == "spot" and side == "buy":
+            try:
+                ticker = self.fetch_ticker(symbol, market)
+                current_price = float(ticker.get("last", 0) or ticker.get("close", 0))
+                if current_price > 0:
+                    # cost = quantità_token × prezzo
+                    cost = round(amount * current_price, 4)
+                    logger.info(
+                        f"[ORDER] Spot BUY {symbol}: amount={amount:.6f} × "
+                        f"price={current_price:.4f} = cost={cost:.4f} USDT"
+                    )
+                    # Con createMarketBuyOrderRequiresPrice=False,
+                    # passiamo il cost come amount
+                    try:
+                        order = self._retry(
+                            client.create_market_buy_order,
+                            symbol, cost, order_params
+                        )
+                        return order
+                    except (AttributeError, TypeError):
+                        # Fallback: usa create_order con price
+                        order = self._retry(
+                            client.create_order,
+                            symbol, "market", side, amount,
+                            current_price, order_params
+                        )
+                        return order
+                else:
+                    logger.error(f"[ORDER] Prezzo non disponibile per {symbol}")
+                    return None
+            except Exception as e:
+                logger.error(f"[ORDER] Spot BUY {symbol} fallito: {e}")
+                return None
+
+        # ── Tutti gli altri ordini (spot SELL, futures BUY/SELL) ──────────
+        try:
+            return self._retry(
+                client.create_market_order,
+                symbol, side, amount, params=order_params
+            )
+        except Exception as e:
+            logger.error(f"[ORDER] {market} {side} {symbol} amount={amount:.6f}: {e}")
+            return None
 
     def create_limit_order(self, symbol: str, side: str, amount: float, price: float,
                            market: str = "spot", params: dict = None) -> dict | None:
@@ -148,19 +218,16 @@ class BitgetExchange:
         return float(info.get("limits", {}).get("amount", {}).get("min", 0.001))
 
     def get_min_notional(self, symbol: str, market: str = "spot") -> float:
-        """Ritorna il valore minimo in USDT per piazzare un ordine su Bitget."""
         markets = self._spot_markets if market == "spot" else self._futures_markets
         info = markets.get(symbol, {})
-        # Bitget espone il min notionale in limits.cost.min o limits.price.min * min_amount
         cost_min = info.get("limits", {}).get("cost", {}).get("min", 0)
         if cost_min and float(cost_min) > 0:
             return float(cost_min)
-        # Fallback: prezzo minimo * quantità minima
         price_min = float(info.get("limits", {}).get("price", {}).get("min", 0) or 0)
         amount_min = float(info.get("limits", {}).get("amount", {}).get("min", 0.001) or 0.001)
         if price_min > 0:
             return price_min * amount_min
-        return 5.0   # fallback conservativo: 5 USDT
+        return 5.0
 
     def price_precision(self, symbol: str, market: str = "spot") -> int:
         markets = self._spot_markets if market == "spot" else self._futures_markets
