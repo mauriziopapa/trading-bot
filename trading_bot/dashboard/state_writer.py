@@ -58,6 +58,7 @@ def write_state(bot) -> None:
                     "entry":     trade["entry"],
                     "current":   current,
                     "size":      trade["size"],
+                    "leverage":  settings.DEFAULT_LEVERAGE if trade["market"] == "futures" else 1,
                     "pnl_pct":   round(pnl_p, 2),
                     "pnl_usdt":  round(pnl_u, 2),
                     "strategy":  trade.get("strategy", ""),

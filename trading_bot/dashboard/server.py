@@ -247,6 +247,135 @@ async def get_regime():
     return {"current_regime": "normal", "current_label": "🚀 Raddoppio ×2", "auto_enabled": True}
 
 
+@app.post("/api/sync")
+async def sync_bitget():
+    """
+    Sincronizza le posizioni del bot con quelle REALI su Bitget.
+    1. Legge balance reale spot + futures
+    2. Legge posizioni futures aperte da Bitget API
+    3. Confronta con risk_manager e segnala discrepanze
+    4. Opzionale: allinea il risk_manager
+    """
+    try:
+        from trading_bot.main import _bot_ref
+        if not _bot_ref:
+            return {"ok": False, "error": "Bot non avviato"}
+
+        bot = _bot_ref
+        result = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
+
+        # ── 1. Balance reale ─────────────────────────────────────────────
+        try:
+            from trading_bot.config import settings as S
+            spot_bal = bot.exchange.get_usdt_balance("spot") if "spot" in S.MARKET_TYPES else 0
+            fut_bal  = bot.exchange.get_usdt_balance("futures") if "futures" in S.MARKET_TYPES else 0
+            result["balance"] = {"spot": round(spot_bal, 4), "futures": round(fut_bal, 4), "total": round(spot_bal + fut_bal, 4)}
+            # Update peak
+            total = spot_bal + fut_bal
+            if total > bot.risk.peak_balance:
+                bot.risk.peak_balance = total
+            bot.risk.session_start_balance = total
+        except Exception as e:
+            result["balance_error"] = str(e)
+
+        # ── 2. Posizioni futures reali da Bitget ─────────────────────────
+        real_futures = []
+        try:
+            positions = bot.exchange.fetch_positions()
+            for p in positions:
+                contracts = float(p.get("contracts", 0) or 0)
+                if contracts == 0:
+                    continue
+                real_futures.append({
+                    "symbol":    p.get("symbol", ""),
+                    "side":      p.get("side", ""),
+                    "contracts": contracts,
+                    "notional":  float(p.get("notional", 0) or 0),
+                    "entry":     float(p.get("entryPrice", 0) or 0),
+                    "mark":      float(p.get("markPrice", 0) or 0),
+                    "pnl":       float(p.get("unrealizedPnl", 0) or 0),
+                    "margin":    float(p.get("initialMargin", 0) or 0),
+                    "lev":       int(float(p.get("leverage", 1) or 1)),
+                    "liq":       float(p.get("liquidationPrice", 0) or 0),
+                })
+            result["bitget_futures"] = real_futures
+        except Exception as e:
+            result["futures_error"] = str(e)
+
+        # ── 3. Posizioni spot reali (solo i token con saldo > 0) ─────────
+        real_spot = []
+        try:
+            balance = bot.exchange.fetch_balance("spot")
+            for asset, info in balance.items():
+                if asset in ("USDT", "USD", "info", "free", "used", "total", "timestamp", "datetime"):
+                    continue
+                total_amt = float(info.get("total", 0) or 0)
+                if total_amt > 0:
+                    # Stima valore
+                    try:
+                        ticker = bot.exchange.fetch_ticker(f"{asset}/USDT", "spot")
+                        price = float(ticker.get("last", 0) or 0)
+                        value = total_amt * price
+                    except Exception:
+                        price = 0; value = 0
+                    if value > 1:  # ignora dust < 1 USDT
+                        real_spot.append({
+                            "asset": asset, "amount": round(total_amt, 6),
+                            "price": round(price, 6), "value_usdt": round(value, 2),
+                        })
+            result["bitget_spot"] = real_spot
+        except Exception as e:
+            result["spot_error"] = str(e)
+
+        # ── 4. Confronta con risk_manager ────────────────────────────────
+        bot_trades = bot.risk.all_open_trades()
+        bot_syms = {t["symbol"] for t in bot_trades}
+        real_syms = {p["symbol"] for p in real_futures}
+        # Spot check
+        spot_syms_bot = {t["symbol"] for t in bot_trades if t["market"] == "spot"}
+        spot_syms_real = {f"{s['asset']}/USDT" for s in real_spot}
+
+        discrepancies = []
+        # Futures su Bitget ma non nel bot
+        for p in real_futures:
+            if p["symbol"] not in bot_syms:
+                discrepancies.append({
+                    "type": "PHANTOM_FUTURES",
+                    "symbol": p["symbol"],
+                    "side": p["side"],
+                    "contracts": p["contracts"],
+                    "pnl": p["pnl"],
+                    "msg": f"{p['symbol']} {p['side']} aperta su Bitget ma NON tracciata dal bot"
+                })
+        # Nel bot ma non su Bitget
+        for t in bot_trades:
+            if t["market"] == "futures" and t["symbol"] not in real_syms:
+                discrepancies.append({
+                    "type": "GHOST_TRADE",
+                    "symbol": t["symbol"],
+                    "msg": f"{t['symbol']} tracciata dal bot ma NON presente su Bitget"
+                })
+
+        result["bot_positions"] = len(bot_trades)
+        result["bitget_positions"] = len(real_futures) + len(real_spot)
+        result["discrepancies"] = discrepancies
+        result["synced"] = len(discrepancies) == 0
+
+        # ── 5. Log ───────────────────────────────────────────────────────
+        logger.info(
+            f"[SYNC] Bot={len(bot_trades)} Bitget={len(real_futures)}fut+{len(real_spot)}spot "
+            f"Discrepanze={len(discrepancies)}"
+        )
+        for d in discrepancies:
+            logger.warning(f"[SYNC] {d['type']}: {d['msg']}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"[SYNC] Errore: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/restart")
 async def restart_bot():
     import threading
