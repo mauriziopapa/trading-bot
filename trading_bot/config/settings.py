@@ -2,10 +2,7 @@
 settings.py — Tutti i parametri runtime vengono SOLO dal DB (tabella bot_config).
 Zero valori hardcoded nel codice. Zero file su disco.
 
-Se un parametro non e' in bot_config il bot lancia un errore esplicito
-invece di usare un default nascosto.
-
-Campi fissi (API keys, symbols, mode): sempre da env vars Railway.
+PATCH v4: Aggiunto MAX_NOTIONAL_PCT per full exposure mode.
 """
 
 from __future__ import annotations
@@ -38,21 +35,23 @@ _FIELD_TYPES: dict[str, type] = {
     "ENABLE_BREAKOUT":       bool,
     "ENABLE_SCALPING":       bool,
     "ENABLE_EMERGING":       bool,
-    # ── Emerging scanner — parametri runtime ──────────────────────────────
-    "EM_MIN_VOLUME_USD":     float,   # volume 24h minimo (default 5M)
-    "EM_MIN_CHANGE_24H":     float,   # % cambio 24h minimo (default 5.0)
-    "EM_MIN_VOLUME_SURGE":   float,   # volume surge minimo (default 2.0)
-    "EM_MAX_MARKET_CAP":     float,   # market cap massimo USD (default 2B)
-    "EM_MIN_MARKET_CAP":     float,   # market cap minimo USD (default 0)
-    "EM_MAX_RESULTS":        int,     # max coin risultati (default 10)
-    "EM_NEW_LISTING_DAYS":   int,     # soglia listing recente giorni (default 30)
-    "EM_EXCLUDE_SYMBOLS":    str,     # simboli esclusi CSV (default "")
+    # ── Emerging scanner ──────────────────────────────────────────────────
+    "EM_MIN_VOLUME_USD":     float,
+    "EM_MIN_CHANGE_24H":     float,
+    "EM_MIN_VOLUME_SURGE":   float,
+    "EM_MAX_MARKET_CAP":     float,
+    "EM_MIN_MARKET_CAP":     float,
+    "EM_MAX_RESULTS":        int,
+    "EM_NEW_LISTING_DAYS":   int,
+    "EM_EXCLUDE_SYMBOLS":    str,
     # ── Sentiment ─────────────────────────────────────────────────────────
     "SENTIMENT_BYPASS":       bool,
     "FEAR_GREED_LONG_MIN":    float,
     "FEAR_GREED_LONG_MAX":    float,
     "FEAR_GREED_SHORT_MIN":   float,
     "FEAR_GREED_SHORT_MAX":   float,
+    # ── v4: Full exposure ─────────────────────────────────────────────────
+    "MAX_NOTIONAL_PCT":       float,   # % max del balance per singolo trade (default 40)
 }
 _RUNTIME_FIELDS = set(_FIELD_TYPES.keys())
 
@@ -109,7 +108,7 @@ def _make_engine():
         return None
     try:
         from sqlalchemy import create_engine
-        ssl = "sslmode=require" not in url  # evita duplicati
+        ssl = "sslmode=require" not in url
         kwargs: dict = {"pool_pre_ping": True}
         if ssl and ("railway" in url or "amazonaws" in url or "supabase" in url):
             kwargs["connect_args"] = {"sslmode": "require", "connect_timeout": 5}
@@ -120,10 +119,6 @@ def _make_engine():
 
 
 def _db_load(engine) -> dict[str, Any] | None:
-    """
-    Legge TUTTI i campi da bot_config.
-    Ritorna dict castato, o None se errore DB.
-    """
     if engine is None:
         return None
     try:
@@ -138,12 +133,10 @@ def _db_load(engine) -> dict[str, Any] | None:
         result = {}
         for key, val_raw in rows:
             try:
-                # Prova JSON (valori salvati da _db_save con json.dumps)
-                # Se fallisce (es. 'isolated' inserito via SQL raw) usa il valore grezzo
                 try:
                     parsed = json.loads(val_raw)
                 except (json.JSONDecodeError, TypeError):
-                    parsed = val_raw   # stringa plain → usala direttamente
+                    parsed = val_raw
                 result[key] = _cast(key, parsed)
             except Exception as e:
                 log.warning(f"[settings] cast error {key}={val_raw!r}: {e}")
@@ -195,10 +188,6 @@ def _db_delete(engine) -> bool:
 # ── Singleton ─────────────────────────────────────────────────────────────────
 
 class DynamicSettings:
-    """
-    Legge SEMPRE dal DB. Nessun default nel codice.
-    Cache locale rinnovata ogni CACHE_TTL secondi.
-    """
     CACHE_TTL = 8.0
 
     def __init__(self):
@@ -222,7 +211,6 @@ class DynamicSettings:
             self._db_ok = True
         else:
             self._db_ok = False
-            # Non toccare _cache: meglio dati vecchi che crash
         self._cache_ts = time.monotonic()
 
     def __getattr__(self, key: str) -> Any:
@@ -252,13 +240,12 @@ class DynamicSettings:
                 changed.append(f"{key}: {old_val} -> {new_val}")
         if to_save:
             ok = _db_save(self._eng(), to_save)
-            # Aggiorna cache subito indipendentemente dall'esito del DB
             self._cache.update(to_save)
             self._cache_ts = time.monotonic()
             if ok:
                 self._db_ok = True
             else:
-                log.error("[settings] set_many: DB non raggiungibile, valori solo in cache locale")
+                log.error("[settings] set_many: DB non raggiungibile")
         return changed
 
     def reset_runtime(self):
@@ -273,10 +260,6 @@ class DynamicSettings:
             return None
 
     def as_dict(self, force: bool = False) -> dict:
-        """
-        Ritorna tutti i valori dalla cache (sincronizzata col DB).
-        force=True: forza rilettura immediata dal DB, bypassa TTL.
-        """
         self._refresh(force=force)
         return dict(self._cache)
 
@@ -287,7 +270,6 @@ class DynamicSettings:
         return "postgresql" if self._db_ok else "memory_only"
 
     # ── campi fissi — sempre da env Railway ───────────────────────────────────
-
     @property
     def BITGET_API_KEY(self)        -> str:  return os.getenv("BITGET_API_KEY", "")
     @property
