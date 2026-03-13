@@ -71,25 +71,28 @@ class BitgetExchange:
     def _setup_leverage(self):
         """
         Imposta leva e margin mode per tutti i simboli futures.
-        Chiamata all'init e dal health_check se la leva è cambiata.
+        Con AUTO mode ci possono essere 100+ simboli — set leverage
+        solo su quelli effettivamente presenti nei mercati caricati.
         """
         current_lev = settings.DEFAULT_LEVERAGE
         if current_lev == self._last_leverage_setup:
-            return  # già sincronizzata
-        for symbol in settings.FUTURES_SYMBOLS:
+            return
+        symbols = settings.FUTURES_SYMBOLS
+        done = 0
+        for symbol in symbols:
+            if symbol not in self._futures_markets:
+                continue
             try:
                 self.futures.set_leverage(
-                    current_lev,
-                    symbol,
+                    current_lev, symbol,
                     params={"marginMode": settings.MARGIN_MODE}
                 )
-                logger.debug(f"Leva {current_lev}x impostata per {symbol}")
+                done += 1
             except Exception as e:
-                # Bitget può dare errore se la leva è già impostata allo stesso valore
-                if "leverage not modified" not in str(e).lower():
-                    logger.warning(f"Setup leva {symbol}: {e}")
+                if "leverage not modified" not in str(e).lower() and "not need" not in str(e).lower():
+                    logger.debug(f"Leva {symbol}: {e}")
         self._last_leverage_setup = current_lev
-        logger.info(f"[EXCHANGE] Leva sincronizzata: {current_lev}x {settings.MARGIN_MODE}")
+        logger.info(f"[EXCHANGE] Leva {current_lev}x su {done}/{len(symbols)} futures")
 
     # ─── OHLCV ───────────────────────────────────────────────────────────────
 
