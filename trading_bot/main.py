@@ -97,8 +97,10 @@ class TradingBot:
         schedule.every(8).minutes.do(lambda: self._sentiment.get_sentiment(force=True))
         schedule.every(5).minutes.do(lambda: self._emerging.scan(force=True))
         schedule.every(5).minutes.do(self._check_regime)
+        schedule.every(10).minutes.do(self._auto_rebalance)
         schedule.every().day.at("00:05").do(self._daily_report)
         if DASHBOARD_ENABLED: schedule.every(20).seconds.do(lambda: write_state(self))
+        self._auto_rebalance()  # primo rebalance all'avvio
         self._scan_swing(); self._scan_breakout(); self._scan_emerging()
         if DASHBOARD_ENABLED: write_state(self)
         logger.info("Bot operativo")
@@ -291,6 +293,12 @@ class TradingBot:
         self.notifier.trade_closed(symbol=sym, side=trade["side"], entry=entry, exit_price=exit_p, pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason, market=mkt)
         logger.info(f"{'✅' if pnl_pct>0 else '❌'} CHIUSO {sym} {mkt} | {reason} | {pnl_pct:+.2f}%")
         self._check_regime_urgent()
+        # Auto-trasferisci USDT liberi spot → futures dopo chiusura spot
+        if mkt == "spot":
+            try:
+                self.exchange.auto_rebalance(keep_spot_usdt=5.0)
+            except Exception:
+                pass
 
     def _sync_balance(self):
         try:
@@ -298,6 +306,24 @@ class TradingBot:
             f = self.exchange.get_usdt_balance("futures") if "futures" in settings.MARKET_TYPES else 0
             self.risk.session_start_balance = s+f; self.risk.peak_balance = s+f
         except Exception as e: logger.warning(f"balance: {e}")
+
+    def _auto_rebalance(self):
+        """
+        Ogni 10 min: trasferisce USDT liberi spot → futures.
+        Mantiene 5 USDT sullo spot per fee e piccoli trade.
+        Anche dopo ogni chiusura spot, trasferisce i proventi.
+        """
+        try:
+            if "futures" not in settings.MARKET_TYPES:
+                return
+            result = self.exchange.auto_rebalance(keep_spot_usdt=5.0)
+            if result.get("transferred", 0) > 0:
+                # Aggiorna il peak balance
+                total = result.get("spot_after", 0) + result.get("futures_after", 0)
+                if total > self.risk.peak_balance:
+                    self.risk.peak_balance = total
+        except Exception as e:
+            logger.debug(f"[REBALANCE] {e}")
 
     def _health_check(self):
         try:
