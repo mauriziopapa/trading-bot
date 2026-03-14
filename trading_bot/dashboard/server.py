@@ -97,7 +97,7 @@ def _apply_to_settings(cfg: dict) -> list[str]:
 def _notify_regime_override():
     """Notifica il regime detector che l'utente ha applicato manualmente."""
     try:
-        from trading_bot.main import _bot_ref
+        from trading_bot.utils.shared import get_bot; _bot_ref = get_bot()
         if _bot_ref and hasattr(_bot_ref, '_regime'):
             _bot_ref._regime.set_manual_override()
             logger.info("[REGIME] Override manuale impostato — auto-switch bloccato 2h")
@@ -239,7 +239,7 @@ async def reset_config():
 async def get_regime():
     """Stato corrente del regime detector."""
     try:
-        from trading_bot.main import _bot_ref
+        from trading_bot.utils.shared import get_bot; _bot_ref = get_bot()
         if _bot_ref and hasattr(_bot_ref, '_regime'):
             return _bot_ref._regime.get_state()
     except Exception:
@@ -258,7 +258,7 @@ async def sync_bitget():
     5. Aggiorna risk_manager in memoria
     """
     try:
-        from trading_bot.main import _bot_ref
+        from trading_bot.utils.shared import get_bot; _bot_ref = get_bot()
         if not _bot_ref:
             return {"ok": False, "error": "Bot non avviato"}
 
@@ -554,12 +554,10 @@ def _sync_update_db_trade(symbol: str, entry: float, size: float, market: str):
 
 @app.post("/api/rebalance")
 async def rebalance():
-    """Trasferisce USDT liberi spot → futures."""
+    """Trasferisce USDT liberi spot → futures. Funziona anche se bot è in processo separato."""
     try:
-        from trading_bot.main import _bot_ref
-        if not _bot_ref:
-            return {"ok": False, "error": "Bot non avviato"}
-        result = _bot_ref.exchange.auto_rebalance(keep_spot_usdt=5.0)
+        from trading_bot.utils.shared import do_rebalance
+        result = do_rebalance(keep_spot=5.0)
         return {"ok": True, **result}
     except Exception as e:
         return {"ok": False, "error": str(e), "transferred": 0}
@@ -598,7 +596,7 @@ async def force_refresh():
     """
     result = {"ok": True, "ts": datetime.now(timezone.utc).isoformat()}
     try:
-        from trading_bot.main import _bot_ref
+        from trading_bot.utils.shared import get_bot; _bot_ref = get_bot()
         if not _bot_ref:
             return {"ok": False, "error": "Bot non avviato"}
 
@@ -648,9 +646,18 @@ async def health():
     try:
         from trading_bot.config import settings as S
         info["storage"] = S.storage_backend()
-        info["db_ok"]   = S._db_ok
+        info["db_ok"] = S._db_ok
     except Exception:
         pass
+    try:
+        from trading_bot.utils.shared import get_bot
+        bot = get_bot()
+        info["bot_connected"] = bot is not None
+        info["bot_type"] = type(bot).__name__ if bot else None
+        import os
+        info["pid"] = os.getpid()
+    except Exception:
+        info["bot_connected"] = False
     return info
 
 
