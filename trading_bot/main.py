@@ -70,6 +70,9 @@ class TradingBot:
     def start(self):
         global _bot_ref; _bot_ref = self; _setup_logger()
         logger.info("=" * 60); logger.info("BITGET TRADING BOT v4"); logger.info(f"Mode: {settings.TRADING_MODE} | Regime: AUTO"); logger.info("=" * 60)
+        # ── Dashboard: avvia uvicorn NELLO STESSO PROCESSO ────────────────
+        if DASHBOARD_ENABLED:
+            self._start_dashboard_server()
         self.exchange.initialize(); self.db.connect(); self.risk.recover_from_db(); self._sync_balance()
         if settings.IS_LIVE: logger.warning("*** LIVE — ORDINI REALI ***")
         try:
@@ -100,11 +103,25 @@ class TradingBot:
         schedule.every(10).minutes.do(self._auto_rebalance)
         schedule.every().day.at("00:05").do(self._daily_report)
         if DASHBOARD_ENABLED: schedule.every(20).seconds.do(lambda: write_state(self))
-        self._auto_rebalance()  # primo rebalance all'avvio
+        self._auto_rebalance()
         self._scan_swing(); self._scan_breakout(); self._scan_emerging()
         if DASHBOARD_ENABLED: write_state(self)
         logger.info("Bot operativo")
         while self._running: schedule.run_pending(); time.sleep(3)
+
+    def _start_dashboard_server(self):
+        """Avvia uvicorn in un thread daemon — stesso processo del bot."""
+        import threading, uvicorn
+        port = int(os.environ.get("PORT", settings.DASHBOARD_PORT))
+        config = uvicorn.Config(
+            "trading_bot.dashboard.server:app",
+            host="0.0.0.0", port=port,
+            log_level="warning", access_log=False,
+        )
+        server = uvicorn.Server(config)
+        thread = threading.Thread(target=server.run, daemon=True, name="dashboard")
+        thread.start()
+        logger.info(f"[DASHBOARD] Avviato su :{port} (stesso processo)")
 
     def _check_regime(self):
         try:
