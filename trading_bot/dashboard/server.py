@@ -552,6 +552,19 @@ def _sync_update_db_trade(symbol: str, entry: float, size: float, market: str):
         logger.debug(f"[SYNC DB] Update {symbol}: {e}")
 
 
+@app.post("/api/rebalance")
+async def rebalance():
+    """Trasferisce USDT liberi spot → futures."""
+    try:
+        from trading_bot.main import _bot_ref
+        if not _bot_ref:
+            return {"ok": False, "error": "Bot non avviato"}
+        result = _bot_ref.exchange.auto_rebalance(keep_spot_usdt=5.0)
+        return {"ok": True, **result}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "transferred": 0}
+
+
 @app.post("/api/restart")
 async def restart_bot():
     import threading
