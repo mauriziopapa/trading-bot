@@ -69,6 +69,12 @@ class TradingBot:
 
     def start(self):
         global _bot_ref; _bot_ref = self; _setup_logger()
+        # Condividi il bot con il server (funziona se stesso processo)
+        try:
+            from trading_bot.utils.shared import set_bot
+            set_bot(self)
+        except Exception:
+            pass
         logger.info("=" * 60); logger.info("BITGET TRADING BOT v4"); logger.info(f"Mode: {settings.TRADING_MODE} | Regime: AUTO"); logger.info("=" * 60)
         # ── Dashboard: avvia uvicorn NELLO STESSO PROCESSO ────────────────
         if DASHBOARD_ENABLED:
