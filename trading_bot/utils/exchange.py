@@ -128,6 +128,71 @@ class BitgetExchange:
         raw = self._retry(self.futures.fetch_positions)
         return [p for p in raw if float(p.get("contracts", 0)) != 0]
 
+    def transfer_spot_to_futures(self, amount: float) -> bool:
+        """
+        Trasferisce USDT da Spot a Futures (USDT-M).
+        Bitget API: transfer tra account interni.
+        Ritorna True se il trasferimento è riuscito.
+        """
+        if amount < 1:
+            return False
+        if not settings.IS_LIVE:
+            logger.info(f"[PAPER] Transfer {amount:.2f} USDT spot→futures")
+            return True
+        try:
+            result = self.spot.transfer("USDT", amount, "spot", "swap")
+            logger.info(f"[TRANSFER] ✅ {amount:.2f} USDT spot → futures | ID={result.get('id','?')}")
+            return True
+        except Exception as e:
+            # Fallback: prova con params Bitget specifici
+            try:
+                result = self.spot.private_post_spot_wallet_transfer({
+                    "coin": "USDT",
+                    "fromType": "spot",
+                    "toType": "usdt_mix",  # Bitget v2: usdt_mix = futures USDT-M
+                    "amount": str(amount),
+                })
+                logger.info(f"[TRANSFER] ✅ {amount:.2f} USDT spot → futures (v2)")
+                return True
+            except Exception as e2:
+                logger.warning(f"[TRANSFER] ❌ {amount:.2f} USDT: {e} / {e2}")
+                return False
+
+    def auto_rebalance(self, keep_spot_usdt: float = 5.0) -> dict:
+        """
+        Trasferisce automaticamente USDT liberi dallo spot ai futures.
+        Mantiene 'keep_spot_usdt' sul wallet spot per eventuali fee.
+        
+        Chiamato periodicamente dallo scheduler (ogni 10 min).
+        Ritorna dict con dettagli del trasferimento.
+        """
+        result = {"transferred": 0, "spot_before": 0, "spot_after": 0, "futures_after": 0}
+        try:
+            spot_free = self.get_usdt_balance("spot")
+            result["spot_before"] = round(spot_free, 2)
+
+            available = spot_free - keep_spot_usdt
+            if available < 2:  # meno di 2 USDT liberi → non trasferire
+                return result
+
+            # Trasferisci
+            amount = round(available, 2)
+            ok = self.transfer_spot_to_futures(amount)
+
+            if ok:
+                result["transferred"] = amount
+                result["spot_after"] = round(spot_free - amount, 2)
+                result["futures_after"] = round(self.get_usdt_balance("futures"), 2)
+                logger.info(
+                    f"[REBALANCE] {amount:.2f} USDT spot→futures | "
+                    f"Spot: {spot_free:.2f}→{result['spot_after']:.2f} | "
+                    f"Futures: {result['futures_after']:.2f}"
+                )
+        except Exception as e:
+            logger.warning(f"[REBALANCE] Errore: {e}")
+
+        return result
+
     # ─── Orders ──────────────────────────────────────────────────────────────
 
     def create_market_order(self, symbol: str, side: str, amount: float,
