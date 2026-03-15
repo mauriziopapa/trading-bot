@@ -1,6 +1,6 @@
 """
 Bitget Trading Bot — Main Orchestrator v7.1
-Stable production version
+Stable production engine with dashboard state
 """
 
 import os
@@ -22,6 +22,7 @@ from trading_bot.strategies.scalping import ScalpingStrategy
 
 from trading_bot.utils.regime_detector import RegimeDetector
 from trading_bot.utils.emerging_scanner import EmergingScanner
+
 from trading_bot.dashboard.state_writer import write_state
 
 
@@ -69,6 +70,9 @@ class TradingBot:
             ScalpingStrategy()
         ]
 
+        self._recent_logs = []
+        self._recent_signals = []
+
         self._running = True
 
 
@@ -85,9 +89,12 @@ class TradingBot:
         logger.info("════════════════════════════════════")
 
         try:
+
             self.exchange.initialize()
             self.db.connect()
+
         except Exception as e:
+
             logger.error(f"Startup error {e}")
 
         self._start_dashboard()
@@ -221,7 +228,7 @@ class TradingBot:
 
         schedule.every(1).hours.do(self._health_check)
 
-        schedule.every(5).seconds.do(self._update_dashboard)
+        schedule.every(3).seconds.do(self._update_dashboard)
 
 
 # ==========================================================
@@ -244,6 +251,15 @@ class TradingBot:
                 signals = strat.scan(self.exchange)
 
                 for signal in signals:
+
+                    self._recent_signals.append({
+                        "symbol": signal.symbol,
+                        "side": signal.side,
+                        "strategy": signal.strategy,
+                        "confidence": signal.confidence
+                    })
+
+                    self._recent_signals = self._recent_signals[-50:]
 
                     self._process_signal(signal)
 
@@ -271,7 +287,7 @@ class TradingBot:
 
 
 # ==========================================================
-# SIGNAL PROCESS
+# PROCESS SIGNAL
 # ==========================================================
 
     def _process_signal(self, signal):
@@ -294,13 +310,6 @@ class TradingBot:
 
             if size <= 0:
                 return
-
-            lev = self.risk.dynamic_leverage(signal.atr, signal.entry)
-
-            try:
-                self.exchange.set_leverage(signal.symbol, lev)
-            except:
-                pass
 
             order = self.exchange.create_market_order(
                 signal.symbol,
@@ -383,8 +392,6 @@ class TradingBot:
 
             direction = 1 if trade["side"] == "buy" else -1
 
-            pnl_usdt = (price - entry) * trade["size"] * direction
-
             pnl_pct = ((price - entry) / entry) * 100 * direction
 
             self.risk.register_close(symbol, pnl_pct, market, reason)
@@ -415,6 +422,9 @@ class TradingBot:
             coins = self.emerging.scan()
 
             if coins:
+
+                self.emerging.last_scan = coins
+
                 logger.info(f"[EMERGING] {len(coins)} coins")
 
         except Exception as e:
