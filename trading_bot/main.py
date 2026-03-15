@@ -1,10 +1,13 @@
 """
-Bitget Trading Bot — Main Orchestrator v7
-Stable production version
+Bitget Trading Bot — Main Orchestrator v7.1
+Stable production engine
 """
 
+import os
 import time
 import schedule
+import threading
+
 from loguru import logger
 
 from trading_bot.config import settings
@@ -21,6 +24,31 @@ from trading_bot.strategies.scalping import ScalpingStrategy
 from trading_bot.utils.regime_detector import RegimeDetector
 from trading_bot.utils.emerging_scanner import EmergingScanner
 
+
+# ==========================================================
+# LOGGER
+# ==========================================================
+
+def setup_logger():
+
+    os.makedirs("logs", exist_ok=True)
+
+    logger.remove()
+
+    logger.add(
+        "logs/bot.log",
+        rotation="50 MB",
+        retention="14 days",
+        level="INFO",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+    )
+
+    logger.add(lambda msg: print(msg, end=""))
+
+
+# ==========================================================
+# BOT
+# ==========================================================
 
 class TradingBot:
 
@@ -50,14 +78,26 @@ class TradingBot:
 
     def start(self):
 
-        logger.info("══════════════════════════════")
-        logger.info("BITGET TRADING BOT v7")
-        logger.info("══════════════════════════════")
+        setup_logger()
 
-        self.exchange.initialize()
-        self.db.connect()
+        logger.info("════════════════════════════════════")
+        logger.info("BITGET TRADING BOT v7.1")
+        logger.info("════════════════════════════════════")
+
+        try:
+
+            self.exchange.initialize()
+            self.db.connect()
+
+        except Exception as e:
+
+            logger.error(f"startup error {e}")
+
+        self._start_dashboard()
 
         self._sync_balance()
+
+        self._telegram_startup()
 
         self._setup_scheduler()
 
@@ -79,26 +119,93 @@ class TradingBot:
 
 
 # ==========================================================
+# DASHBOARD
+# ==========================================================
+
+    def _start_dashboard(self):
+
+        if not settings.ENABLE_DASHBOARD:
+            return
+
+        try:
+
+            import uvicorn
+
+            port = int(os.environ.get("PORT", 8080))
+
+            config = uvicorn.Config(
+                "trading_bot.dashboard.server:app",
+                host="0.0.0.0",
+                port=port,
+                log_level="warning",
+                access_log=False
+            )
+
+            server = uvicorn.Server(config)
+
+            threading.Thread(
+                target=server.run,
+                daemon=True
+            ).start()
+
+            logger.info(f"[DASHBOARD] running on :{port}")
+
+        except Exception as e:
+
+            logger.warning(f"dashboard error {e}")
+
+
+# ==========================================================
+# TELEGRAM
+# ==========================================================
+
+    def _telegram_startup(self):
+
+        try:
+
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
+
+            self.notifier.startup(
+                settings.TRADING_MODE,
+                settings.SPOT_SYMBOLS,
+                settings.FUTURES_SYMBOLS,
+                spot,
+                futures
+            )
+
+        except Exception as e:
+
+            logger.warning(f"telegram startup {e}")
+
+
+# ==========================================================
 # RISK GUARD
 # ==========================================================
 
     def _risk_guard(self):
 
-        spot = self.exchange.get_usdt_balance("spot")
-        futures = self.exchange.get_usdt_balance("futures")
+        try:
 
-        balance = spot + futures
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
 
-        if self.risk.drawdown_exceeded(balance):
+            balance = spot + futures
 
-            logger.error("MAX DRAWDOWN STOP")
+            if self.risk.drawdown_exceeded(balance):
 
-            try:
-                self.notifier.error("BOT STOPPED MAX DD")
-            except:
-                pass
+                logger.error("MAX DRAWDOWN HIT")
 
-            self._running = False
+                try:
+                    self.notifier.error("BOT STOPPED MAX DD")
+                except:
+                    pass
+
+                self._running = False
+
+        except Exception as e:
+
+            logger.warning(f"[RISK GUARD] {e}")
 
 
 # ==========================================================
@@ -165,7 +272,7 @@ class TradingBot:
 
 
 # ==========================================================
-# PROCESS SIGNAL
+# SIGNAL PROCESS
 # ==========================================================
 
     def _process_signal(self, signal):
@@ -256,7 +363,7 @@ class TradingBot:
 
 
 # ==========================================================
-# CLOSE POSITION
+# CLOSE
 # ==========================================================
 
     def _close_position(self, symbol, market, trade, price, reason):

@@ -1,5 +1,6 @@
 """
-Risk Manager v6 — Stable production
+Risk Manager v6
+Stable production version
 """
 
 import threading
@@ -19,6 +20,9 @@ class RiskManager:
 
         self.session_start_balance = 0
         self.peak_balance = 0
+
+        self.wins = 0
+        self.losses = 0
 
 
 # ==========================================================
@@ -74,15 +78,13 @@ class RiskManager:
         if atr <= 0 or entry <= 0:
             return 5
 
-        volatility = atr / entry
+        vol = atr / entry
 
-        if volatility < 0.01:
+        if vol < 0.01:
             return 15
-
-        if volatility < 0.02:
+        if vol < 0.02:
             return 10
-
-        if volatility < 0.04:
+        if vol < 0.04:
             return 7
 
         return 5
@@ -132,12 +134,17 @@ class RiskManager:
 
             store.pop(symbol, None)
 
+        if pnl_pct > 0:
+            self.wins += 1
+        else:
+            self.losses += 1
+
 
 # ==========================================================
 # CLOSE LOGIC
 # ==========================================================
 
-    def should_close(self, trade, current_price):
+    def should_close(self, trade, price):
 
         side = trade["side"]
 
@@ -146,18 +153,18 @@ class RiskManager:
 
         if side == "buy":
 
-            if current_price <= sl:
+            if price <= sl:
                 return True, "stop_loss"
 
-            if tp and current_price >= tp:
+            if tp and price >= tp:
                 return True, "take_profit"
 
         else:
 
-            if current_price >= sl:
+            if price >= sl:
                 return True, "stop_loss"
 
-            if tp and current_price <= tp:
+            if tp and price <= tp:
                 return True, "take_profit"
 
         return False, ""
@@ -190,6 +197,6 @@ class RiskManager:
 
         return {
             "open_trades": total_open,
-            "wins": 0,
-            "losses": 0
+            "wins": self.wins,
+            "losses": self.losses
         }
