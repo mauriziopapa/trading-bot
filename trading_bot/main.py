@@ -195,7 +195,18 @@ class TradingBot:
         logger.info(f"[DASHBOARD] running on :{port}")
 
 
-   _update_dashboard
+    def _update_dashboard(self):
+
+        if not DASHBOARD_ENABLED:
+            return
+
+        try:
+
+            write_state(self)
+
+        except Exception as e:
+
+            logger.warning(f"[DASHBOARD] update error {e}")
 
 
 # --------------------------------------------------
