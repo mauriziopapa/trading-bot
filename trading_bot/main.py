@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v6.3
+Bitget Trading Bot — Main Orchestrator v6.4
 Stable production version
 """
 
@@ -8,7 +8,6 @@ import time
 import schedule
 import threading
 
-from datetime import datetime, timezone
 from loguru import logger
 
 from trading_bot.config import settings
@@ -129,7 +128,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v6.3")
+        logger.info("BITGET TRADING BOT v6.4")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -186,7 +185,7 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# DRAW DOWN CHECK (FIX)
+# DRAW DOWN CHECK
 # --------------------------------------------------
 
     def _check_drawdown(self):
@@ -198,19 +197,12 @@ class TradingBot:
 
             balance = spot + futures
 
-            peak = self.risk.peak_balance
+            if self.risk.drawdown_exceeded(balance):
 
-            if peak <= 0:
-                return
-
-            dd = ((peak - balance) / peak) * 100
-
-            if dd > settings.MAX_DRAWDOWN_PCT:
-
-                logger.error(f"MAX DRAWDOWN HIT {dd:.2f}%")
+                logger.error("MAX DRAWDOWN STOP BOT")
 
                 try:
-                    self.notifier.error(f"BOT STOPPED MAX DD {dd:.2f}%")
+                    self.notifier.error("BOT STOPPED - MAX DRAWDOWN")
                 except:
                     pass
 
