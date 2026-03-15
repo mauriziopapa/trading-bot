@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v7
+Bitget Trading Bot — Main Orchestrator v7.1
 Stable + Dashboard + Emerging Momentum Trading
 """
 
@@ -131,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v7")
+        logger.info("BITGET TRADING BOT v7.1")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -175,47 +175,6 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# DASHBOARD
-# --------------------------------------------------
-
-    def _start_dashboard(self):
-
-        import uvicorn
-
-        port = int(os.environ.get("PORT", settings.DASHBOARD_PORT))
-
-        config = uvicorn.Config(
-            "trading_bot.dashboard.server:app",
-            host="0.0.0.0",
-            port=port,
-            log_level="warning",
-            access_log=False
-        )
-
-        server = uvicorn.Server(config)
-
-        thread = threading.Thread(
-            target=server.run,
-            daemon=True
-        )
-
-        thread.start()
-
-        logger.info(f"[DASHBOARD] running on :{port}")
-
-
-    def _update_dashboard(self):
-
-        if not DASHBOARD_ENABLED:
-            return
-
-        try:
-            write_state(self)
-        except Exception:
-            pass
-
-
-# --------------------------------------------------
 # SCHEDULER
 # --------------------------------------------------
 
@@ -233,6 +192,58 @@ class TradingBot:
 
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
+
+
+# --------------------------------------------------
+# SWING SCAN
+# --------------------------------------------------
+
+    def _scan_swing_if_candle_closed(self):
+
+        now = datetime.now(timezone.utc)
+
+        if now.minute % 15 == 0 and now.second < 5:
+
+            time.sleep(2)
+
+            self._scan_swing()
+
+
+    def _scan_swing(self):
+
+        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
+
+        if not strategies:
+            return
+
+        for symbol in settings.SPOT_SYMBOLS[:20]:
+
+            try:
+
+                df = ohlcv_to_df(
+                    self.exchange.fetch_ohlcv(
+                        symbol,
+                        settings.TF_SWING,
+                        300,
+                        "spot"
+                    )
+                )
+
+                for strat in strategies:
+
+                    signal = strat.analyze(df, symbol, "spot")
+
+                    if signal:
+
+                        logger.info(f"[SWING SIGNAL] {symbol}")
+
+                        self._track_signal(signal)
+
+                        self._process_signal(signal)
+
+            except Exception as e:
+
+                logger.debug(f"[SWING] {symbol} {e}")
 
 
 # --------------------------------------------------
@@ -254,6 +265,7 @@ class TradingBot:
             logger.info(f"[BALANCE] {total:.2f} USDT")
 
         except Exception as e:
+
             logger.warning(f"[BALANCE] {e}")
 
 
