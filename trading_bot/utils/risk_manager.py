@@ -1,6 +1,7 @@
 """
-Risk Manager v5 — Production Stable
+Risk Manager v5.1 — Production Stable
 ════════════════════════════════════
+Drawdown protection added
 """
 
 import time
@@ -17,7 +18,7 @@ _CORRELATION_CLUSTERS = {
 }
 
 
-def _normalize_base(symbol: str) -> str:
+def _normalize_base(symbol: str):
 
     s = symbol.upper()
 
@@ -78,6 +79,75 @@ class RiskManager:
 
         self._sl_cooldown = {}
 
+
+# ==========================================================
+# DRAW DOWN PROTECTION
+# ==========================================================
+
+    def drawdown_exceeded(self, current_balance):
+
+        """
+        Controlla se il drawdown massimo è stato superato
+        """
+
+        try:
+
+            if current_balance <= 0:
+                return False
+
+            with self._lock:
+
+                # aggiorna peak equity
+                if current_balance > self.peak_balance:
+                    self.peak_balance = current_balance
+
+                peak = self.peak_balance
+
+            if peak <= 0:
+                return False
+
+            drawdown_pct = ((peak - current_balance) / peak) * 100
+
+            if drawdown_pct >= settings.MAX_DRAWDOWN_PCT:
+
+                logger.error(
+                    f"[RISK] MAX DRAWDOWN HIT {drawdown_pct:.2f}% "
+                    f"(peak={peak:.2f} balance={current_balance:.2f})"
+                )
+
+                return True
+
+            return False
+
+        except Exception as e:
+
+            logger.warning(f"[RISK] drawdown error {e}")
+
+            return False
+
+
+# ==========================================================
+# DRAWDOWN STATS
+# ==========================================================
+
+    def current_drawdown(self, current_balance):
+
+        try:
+
+            peak = self.peak_balance
+
+            if peak <= 0:
+                return 0
+
+            dd = ((peak - current_balance) / peak) * 100
+
+            return round(dd, 2)
+
+        except:
+
+            return 0
+
+
 # ==========================================================
 # STATS
 # ==========================================================
@@ -124,60 +194,6 @@ class RiskManager:
 
 
 # ==========================================================
-# DB RECOVERY
-# ==========================================================
-
-    def recover_from_db(self):
-
-        try:
-
-            from trading_bot.models.database import Trade, DB_AVAILABLE
-
-            if not DB_AVAILABLE:
-                return
-
-            from sqlalchemy.orm import Session
-            from sqlalchemy import create_engine
-
-            url = settings.DATABASE_URL
-
-            engine = create_engine(url, pool_pre_ping=True)
-
-            with Session(engine) as s:
-
-                trades = s.query(Trade).filter(Trade.status == "open").all()
-
-            with self._lock:
-
-                for t in trades:
-
-                    td = {
-
-                        "order_id": t.order_id,
-                        "side": t.side,
-                        "entry": t.entry_price,
-                        "size": t.size,
-                        "stop_loss": t.stop_loss,
-                        "take_profit": t.take_profit,
-                        "atr": t.atr,
-                        "open_ts": time.time()
-                    }
-
-                    if t.market == "spot":
-                        self.open_spot[t.symbol] = td
-                    else:
-                        self.open_futures[t.symbol] = td
-
-                    self._pending_symbols.add(_normalize_base(t.symbol))
-
-            logger.info(f"[RISK] recovery {len(trades)} trades")
-
-        except Exception as e:
-
-            logger.error(f"[RISK] recovery error {e}")
-
-
-# ==========================================================
 # SYMBOL LOCK
 # ==========================================================
 
@@ -205,19 +221,6 @@ class RiskManager:
 
 
 # ==========================================================
-# EXCHANGE SYNC
-# ==========================================================
-
-    def force_close(self, symbol, market):
-
-        with self._lock:
-
-            store = self.open_spot if market == "spot" else self.open_futures
-
-            store.pop(symbol, None)
-
-
-# ==========================================================
 # POSITION SIZING
 # ==========================================================
 
@@ -242,7 +245,7 @@ class RiskManager:
 
         size = units / entry
 
-        max_notional = balance * 0.35
+        max_notional = balance * settings.MAX_NOTIONAL_PCT / 100
 
         notional = size * entry
 
@@ -289,60 +292,6 @@ class RiskManager:
             return 0.8
 
         return 1
-
-
-# ==========================================================
-# STOPS
-# ==========================================================
-
-    def trailing_stop(self, trade, current_price):
-
-        trail = settings.TRAILING_STOP_PCT / 100
-
-        atr = trade.get("atr", 0)
-
-        entry = trade.get("entry", current_price)
-
-        atr_ratio = atr / entry if entry > 0 else 0
-
-        trail = max(trail, atr_ratio * 1.2)
-
-        if trade["side"] == "buy":
-
-            return max(trade["stop_loss"], current_price * (1 - trail))
-
-        return min(trade["stop_loss"], current_price * (1 + trail))
-
-
-# ==========================================================
-# CLOSE CONDITIONS
-# ==========================================================
-
-    def should_close(self, trade, current_price):
-
-        side = trade["side"]
-
-        sl = trade.get("stop_loss")
-
-        tp = trade.get("take_profit")
-
-        if side == "buy":
-
-            if current_price <= sl:
-                return True, "stop_loss"
-
-            if tp and current_price >= tp:
-                return True, "take_profit"
-
-        else:
-
-            if current_price >= sl:
-                return True, "stop_loss"
-
-            if tp and current_price <= tp:
-                return True, "take_profit"
-
-        return False, ""
 
 
 # ==========================================================
@@ -396,11 +345,9 @@ class RiskManager:
             trades = []
 
             for s, t in self.open_spot.items():
-
                 trades.append({**t, "symbol": s, "market": "spot"})
 
             for s, t in self.open_futures.items():
-
                 trades.append({**t, "symbol": s, "market": "futures"})
 
         return trades
