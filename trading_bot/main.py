@@ -255,6 +255,45 @@ class TradingBot:
 
                 logger.error(f"[SWING] {symbol} {e}")
 
+# --------------------------------------------------
+# SCALPING SCAN
+# --------------------------------------------------
+
+def _scan_scalping(self):
+
+    strategies = [s for s in self.strategies if s.NAME == "SCALPING"]
+
+    if not strategies:
+        return
+
+    for symbol in settings.SPOT_SYMBOLS:
+
+        try:
+
+            df = ohlcv_to_df(
+                self.exchange.fetch_ohlcv(
+                    symbol,
+                    settings.TF_SCALP,
+                    120,
+                    "spot"
+                )
+            )
+
+            for strat in strategies:
+
+                signal = strat.analyze(df, symbol, "spot")
+
+                if signal:
+
+                    logger.info(f"[SCALPING SIGNAL] {symbol}")
+
+                    self._track_signal(signal)
+
+                    self._process_signal(signal)
+
+        except Exception as e:
+
+            logger.debug(f"[SCALPING] {symbol} {e}")
 
 # --------------------------------------------------
 # EMERGING SCAN (COLLEGATO AL TRADING)
