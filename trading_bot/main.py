@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v7.1
+Bitget Trading Bot — Main Orchestrator v7.2
 Stable + Dashboard + Emerging Momentum Trading
 """
 
@@ -131,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v7.1")
+        logger.info("BITGET TRADING BOT v7.2")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -175,23 +175,82 @@ class TradingBot:
 
 
 # --------------------------------------------------
+# DASHBOARD
+# --------------------------------------------------
+
+    def _start_dashboard(self):
+
+        import uvicorn
+
+        port = int(os.environ.get("PORT", settings.DASHBOARD_PORT))
+
+        config = uvicorn.Config(
+            "trading_bot.dashboard.server:app",
+            host="0.0.0.0",
+            port=port,
+            log_level="warning",
+            access_log=False
+        )
+
+        server = uvicorn.Server(config)
+
+        thread = threading.Thread(
+            target=server.run,
+            daemon=True
+        )
+
+        thread.start()
+
+        logger.info(f"[DASHBOARD] running on :{port}")
+
+
+    def _update_dashboard(self):
+
+        if not DASHBOARD_ENABLED:
+            return
+
+        try:
+            write_state(self)
+        except Exception:
+            pass
+
+
+# --------------------------------------------------
 # SCHEDULER
 # --------------------------------------------------
 
     def _setup_scheduler(self):
 
         schedule.every(1).minutes.do(self._scan_swing_if_candle_closed)
-
         schedule.every(45).seconds.do(self._scan_scalping)
-
         schedule.every(3).minutes.do(self._scan_emerging)
-
         schedule.every(30).seconds.do(self._monitor_positions)
-
         schedule.every(5).minutes.do(self._check_regime)
 
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
+
+
+# --------------------------------------------------
+# BALANCE
+# --------------------------------------------------
+
+    def _sync_balance(self):
+
+        try:
+
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
+
+            total = spot + futures
+
+            self.risk.session_start_balance = total
+            self.risk.peak_balance = total
+
+            logger.info(f"[BALANCE] {total:.2f} USDT")
+
+        except Exception as e:
+            logger.warning(f"[BALANCE] {e}")
 
 
 # --------------------------------------------------
@@ -238,58 +297,10 @@ class TradingBot:
                         logger.info(f"[SWING SIGNAL] {symbol}")
 
                         self._track_signal(signal)
-
                         self._process_signal(signal)
 
             except Exception as e:
-
                 logger.debug(f"[SWING] {symbol} {e}")
-
-
-# --------------------------------------------------
-# BALANCE
-# --------------------------------------------------
-
-    def _sync_balance(self):
-
-        try:
-
-            spot = self.exchange.get_usdt_balance("spot")
-            futures = self.exchange.get_usdt_balance("futures")
-
-            total = spot + futures
-
-            self.risk.session_start_balance = total
-            self.risk.peak_balance = total
-
-            logger.info(f"[BALANCE] {total:.2f} USDT")
-
-        except Exception as e:
-
-            logger.warning(f"[BALANCE] {e}")
-
-
-# --------------------------------------------------
-# MOMENTUM RANK
-# --------------------------------------------------
-
-    def _rank_emerging(self, coins):
-
-        ranked = []
-
-        for c in coins:
-
-            score = (
-                c.get("score", 0) * 0.5 +
-                abs(c.get("change", 0)) * 0.3 +
-                c.get("surge", 1) * 10 * 0.2
-            )
-
-            ranked.append((score, c))
-
-        ranked.sort(reverse=True)
-
-        return [c for _, c in ranked]
 
 
 # --------------------------------------------------
@@ -303,9 +314,7 @@ class TradingBot:
         if not strategies:
             return
 
-        symbols = settings.SPOT_SYMBOLS[:15]
-
-        for symbol in symbols:
+        for symbol in settings.SPOT_SYMBOLS[:15]:
 
             try:
 
@@ -327,7 +336,6 @@ class TradingBot:
                         logger.info(f"[SCALPING] {symbol}")
 
                         self._track_signal(signal)
-
                         self._process_signal(signal)
 
             except Exception:
@@ -347,9 +355,9 @@ class TradingBot:
             if not coins:
                 return
 
-            ranked = self._rank_emerging(coins)
+            coins = sorted(coins, key=lambda x: x.get("score", 0), reverse=True)
 
-            top = ranked[:5]
+            top = coins[:5]
 
             logger.info(f"[EMERGING] top {[c['symbol'] for c in top]}")
 
@@ -378,7 +386,6 @@ class TradingBot:
                         logger.info(f"[EMERGING SIGNAL] {symbol}")
 
                         self._track_signal(signal)
-
                         self._process_signal(signal)
 
         except Exception as e:
@@ -468,11 +475,7 @@ class TradingBot:
                 "atr": signal.atr
             }
 
-            self.risk.register_open(
-                signal.symbol,
-                trade_data,
-                signal.market
-            )
+            self.risk.register_open(signal.symbol, trade_data, signal.market)
 
             self.notifier.trade_opened(
                 symbol=signal.symbol,
@@ -512,7 +515,6 @@ class TradingBot:
                 close, reason = self.risk.should_close(trade, price)
 
                 if close:
-
                     self._close_position(symbol, market, trade, price, reason)
 
             except Exception as e:
@@ -520,7 +522,7 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# CLOSE
+# CLOSE POSITION
 # --------------------------------------------------
 
     def _close_position(self, symbol, market, trade, exit_price, reason):
@@ -529,12 +531,7 @@ class TradingBot:
 
             side = "sell" if trade["side"] == "buy" else "buy"
 
-            self.exchange.create_market_order(
-                symbol,
-                side,
-                trade["size"],
-                market
-            )
+            self.exchange.create_market_order(symbol, side, trade["size"], market)
 
             entry = trade["entry"]
 
