@@ -53,6 +53,44 @@ def _get_cluster(symbol: str):
 
     return None
 
+class RiskManager:
+
+    def __init__(self):
+
+        self._lock = threading.Lock()
+
+        self.open_spot = {}
+        self.open_futures = {}
+
+        self._pending_symbols = set()
+
+        self.session_start_balance = 0
+        self.peak_balance = 0
+
+        self.daily_pnl = 0
+        self.daily_reset_ts = 0
+
+        self.daily_trades = 0
+
+        self.wins = 0
+        self.losses = 0
+
+        self.total_win_pct = 0
+        self.total_loss_pct = 0
+
+        self._consecutive_wins = 0
+        self._consecutive_losses = 0
+
+        self._recent_pnls = []
+
+        self._in_recovery = False
+
+        self._sl_cooldown = {}
+
+# ==========================================================
+# STATS
+# ==========================================================
+
 def stats(self):
 
     try:
@@ -88,40 +126,6 @@ def stats(self):
             "losses": 0,
             "winrate": 0
         }
-
-class RiskManager:
-
-    def __init__(self):
-
-        self._lock = threading.Lock()
-
-        self.open_spot = {}
-        self.open_futures = {}
-
-        self._pending_symbols = set()
-
-        self.session_start_balance = 0
-        self.peak_balance = 0
-
-        self.daily_pnl = 0
-        self.daily_reset_ts = 0
-
-        self.daily_trades = 0
-
-        self.wins = 0
-        self.losses = 0
-
-        self.total_win_pct = 0
-        self.total_loss_pct = 0
-
-        self._consecutive_wins = 0
-        self._consecutive_losses = 0
-
-        self._recent_pnls = []
-
-        self._in_recovery = False
-
-        self._sl_cooldown = {}
 
 
 # ==========================================================
