@@ -144,6 +144,23 @@ class TradingBot:
 
         self._sync_balance()
 
+        try:
+
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
+
+            self.notifier.startup(
+                settings.TRADING_MODE,
+                settings.SPOT_SYMBOLS,
+                settings.FUTURES_SYMBOLS,
+                spot,
+                futures
+            )
+
+        except Exception as e:
+
+            logger.warning(f"telegram startup {e}")
+
         self._setup_scheduler()
 
         logger.info("Bot operativo")
@@ -458,6 +475,18 @@ class TradingBot:
                 signal.market
             )
 
+            self.notifier.trade_opened(
+                                            symbol=signal.symbol,
+                                            side=signal.side,
+                                            size=size,
+                                            entry=signal.entry,
+                                            stop_loss=signal.stop_loss,
+                                            take_profit=signal.take_profit,
+                                            market=signal.market,
+                                            strategy=signal.strategy,
+                                            confidence=signal.confidence
+                                        )
+
         except Exception as e:
             logger.error(f"[TRADE] {signal.symbol} {e}")
 
@@ -485,6 +514,19 @@ class TradingBot:
 
                 if close:
                     self._close_position(symbol, market, trade, price, reason)
+
+                    pnl_usdt = trade["size"] * entry * (pnl_pct / 100)
+
+                    self.notifier.trade_closed(
+                        symbol=symbol,
+                        side=trade["side"],
+                        entry=entry,
+                        exit_price=exit_price,
+                        pnl_pct=pnl_pct,
+                        pnl_usdt=pnl_usdt,
+                        reason=reason,
+                        market=market
+                    )
 
             except Exception as e:
                 logger.error(f"[MONITOR] {e}")
