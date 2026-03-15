@@ -443,6 +443,11 @@ class TradingBot:
             if balance < 10:
                 return
 
+            logger.info(
+                            f"[SIGNAL] {signal.symbol} "
+                            f"entry={signal.entry:.6f} "
+                            f"sl={signal.stop_loss:.6f}"
+                        )                                                        
             size = self.risk.position_size(
                 balance,
                 signal.entry,
@@ -452,6 +457,8 @@ class TradingBot:
                 symbol=signal.symbol
             )
 
+            logger.info(f"[SIZE] {signal.symbol} size={size}")
+            
             if size <= 0:
                 return
 
