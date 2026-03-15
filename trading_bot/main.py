@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v6.6
+Bitget Trading Bot — Main Orchestrator v6.7
 Stable + Dashboard + Emerging Trading
 """
 
@@ -37,10 +37,11 @@ if settings.ENABLE_DASHBOARD:
     try:
         from trading_bot.dashboard.state_writer import write_state
         DASHBOARD_ENABLED = True
-    except:
+    except Exception:
         DASHBOARD_ENABLED = False
 else:
     DASHBOARD_ENABLED = False
+
 
 _bot_ref = None
 
@@ -130,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v6.6")
+        logger.info("BITGET TRADING BOT v6.7")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -187,6 +188,17 @@ class TradingBot:
         logger.info(f"[DASHBOARD] running on :{port}")
 
 
+    def _update_dashboard(self):
+
+        if not DASHBOARD_ENABLED:
+            return
+
+        try:
+            write_state(self)
+        except Exception:
+            pass
+
+
 # --------------------------------------------------
 # SCHEDULER
 # --------------------------------------------------
@@ -205,6 +217,28 @@ class TradingBot:
 
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
+
+
+# --------------------------------------------------
+# BALANCE SYNC
+# --------------------------------------------------
+
+    def _sync_balance(self):
+
+        try:
+
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
+
+            total = spot + futures
+
+            self.risk.session_start_balance = total
+            self.risk.peak_balance = total
+
+            logger.info(f"[BALANCE] {total:.2f} USDT")
+
+        except Exception as e:
+            logger.warning(f"[BALANCE] {e}")
 
 
 # --------------------------------------------------
@@ -252,51 +286,51 @@ class TradingBot:
                         self._process_signal(signal)
 
             except Exception as e:
+                logger.debug(f"[SWING] {symbol} {e}")
 
-                logger.error(f"[SWING] {symbol} {e}")
 
 # --------------------------------------------------
-# SCALPING SCAN
+# SCALPING
 # --------------------------------------------------
 
-def _scan_scalping(self):
+    def _scan_scalping(self):
 
-    strategies = [s for s in self.strategies if s.NAME == "SCALPING"]
+        strategies = [s for s in self.strategies if s.NAME == "SCALPING"]
 
-    if not strategies:
-        return
+        if not strategies:
+            return
 
-    for symbol in settings.SPOT_SYMBOLS:
+        for symbol in settings.SPOT_SYMBOLS:
 
-        try:
+            try:
 
-            df = ohlcv_to_df(
-                self.exchange.fetch_ohlcv(
-                    symbol,
-                    settings.TF_SCALP,
-                    120,
-                    "spot"
+                df = ohlcv_to_df(
+                    self.exchange.fetch_ohlcv(
+                        symbol,
+                        settings.TF_SCALP,
+                        120,
+                        "spot"
+                    )
                 )
-            )
 
-            for strat in strategies:
+                for strat in strategies:
 
-                signal = strat.analyze(df, symbol, "spot")
+                    signal = strat.analyze(df, symbol, "spot")
 
-                if signal:
+                    if signal:
 
-                    logger.info(f"[SCALPING SIGNAL] {symbol}")
+                        logger.info(f"[SCALPING] {symbol}")
 
-                    self._track_signal(signal)
+                        self._track_signal(signal)
 
-                    self._process_signal(signal)
+                        self._process_signal(signal)
 
-        except Exception as e:
+            except Exception as e:
+                logger.debug(f"[SCALPING] {symbol} {e}")
 
-            logger.debug(f"[SCALPING] {symbol} {e}")
 
 # --------------------------------------------------
-# EMERGING SCAN (COLLEGATO AL TRADING)
+# EMERGING
 # --------------------------------------------------
 
     def _scan_emerging(self):
@@ -308,11 +342,9 @@ def _scan_scalping(self):
             if not coins:
                 return
 
-            self._emerging.last_scan = coins
-
             for coin in coins[:10]:
 
-                symbol = coin["symbol"] + "/USDT"
+                symbol = f"{coin['symbol'].upper()}/USDT"
 
                 if symbol not in settings.SPOT_SYMBOLS:
                     continue
@@ -339,12 +371,11 @@ def _scan_scalping(self):
                         self._process_signal(signal)
 
         except Exception as e:
-
             logger.error(f"[EMERGING] {e}")
 
 
 # --------------------------------------------------
-# SIGNAL TRACKING
+# SIGNAL TRACK
 # --------------------------------------------------
 
     def _track_signal(self, signal):
@@ -373,7 +404,6 @@ def _scan_scalping(self):
             self._execute_signal(signal)
 
         finally:
-
             self.risk.release_symbol(signal.symbol)
 
 
@@ -403,10 +433,10 @@ def _scan_scalping(self):
                 return
 
             order = self.exchange.create_market_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                amount=size,
-                market=signal.market
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market
             )
 
             if not order:
@@ -429,12 +459,11 @@ def _scan_scalping(self):
             )
 
         except Exception as e:
-
             logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
-# POSITION MONITOR
+# MONITOR
 # --------------------------------------------------
 
     def _monitor_positions(self):
@@ -455,22 +484,14 @@ def _scan_scalping(self):
                 close, reason = self.risk.should_close(trade, price)
 
                 if close:
-
-                    self._close_position(
-                        symbol,
-                        market,
-                        trade,
-                        price,
-                        reason
-                    )
+                    self._close_position(symbol, market, trade, price, reason)
 
             except Exception as e:
-
                 logger.error(f"[MONITOR] {e}")
 
 
 # --------------------------------------------------
-# CLOSE POSITION
+# CLOSE
 # --------------------------------------------------
 
     def _close_position(self, symbol, market, trade, exit_price, reason):
@@ -498,12 +519,11 @@ def _scan_scalping(self):
             logger.info(f"CLOSE {symbol} {pnl_pct:+.2f}%")
 
         except Exception as e:
-
             logger.error(f"[CLOSE] {symbol} {e}")
 
 
 # --------------------------------------------------
-# SUPPORT
+# REGIME
 # --------------------------------------------------
 
     def _check_regime(self):
@@ -514,31 +534,7 @@ def _scan_scalping(self):
             logger.error(f"[REGIME] {e}")
 
 
-    def _update_dashboard(self):
-
-        try:
-            write_state(self)
-        except Exception:
-            pass
-
-
-    def _sync_balance(self):
-
-        try:
-
-            s = self.exchange.get_usdt_balance("spot")
-            f = self.exchange.get_usdt_balance("futures")
-
-            self.risk.session_start_balance = s + f
-            self.risk.peak_balance = s + f
-
-        except Exception as e:
-
-            logger.warning(e)
-
-
 # --------------------------------------------------
 
 if __name__ == "__main__":
-
     TradingBot().start()
