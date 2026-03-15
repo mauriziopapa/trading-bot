@@ -1,13 +1,12 @@
 """
 Bitget Trading Bot — Main Orchestrator v7.1
-Stable production engine
+Stable production version
 """
 
 import os
 import time
 import schedule
 import threading
-
 from loguru import logger
 
 from trading_bot.config import settings
@@ -15,7 +14,6 @@ from trading_bot.utils.exchange import BitgetExchange
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.utils.notifier import TelegramNotifier
 from trading_bot.models.database import DB
-from trading_bot.dashboard.state_writer import write_state
 
 from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
@@ -24,6 +22,7 @@ from trading_bot.strategies.scalping import ScalpingStrategy
 
 from trading_bot.utils.regime_detector import RegimeDetector
 from trading_bot.utils.emerging_scanner import EmergingScanner
+from trading_bot.dashboard.state_writer import write_state
 
 
 # ==========================================================
@@ -86,13 +85,10 @@ class TradingBot:
         logger.info("════════════════════════════════════")
 
         try:
-
             self.exchange.initialize()
             self.db.connect()
-
         except Exception as e:
-
-            logger.error(f"startup error {e}")
+            logger.error(f"Startup error {e}")
 
         self._start_dashboard()
 
@@ -153,17 +149,8 @@ class TradingBot:
 
         except Exception as e:
 
-            logger.warning(f"dashboard error {e}")
+            logger.warning(f"Dashboard error {e}")
 
-    def _update_dashboard(self):
-
-    try:
-
-        write_state(self)
-
-    except Exception as e:
-
-        logger.warning(f"[DASHBOARD UPDATE] {e}")
 
 # ==========================================================
 # TELEGRAM
@@ -186,7 +173,7 @@ class TradingBot:
 
         except Exception as e:
 
-            logger.warning(f"telegram startup {e}")
+            logger.warning(f"Telegram startup error {e}")
 
 
 # ==========================================================
@@ -235,6 +222,7 @@ class TradingBot:
         schedule.every(1).hours.do(self._health_check)
 
         schedule.every(5).seconds.do(self._update_dashboard)
+
 
 # ==========================================================
 # MARKET SCAN
@@ -432,6 +420,14 @@ class TradingBot:
         except Exception as e:
 
             logger.error(f"[EMERGING] {e}")
+
+
+    def _update_dashboard(self):
+
+        try:
+            write_state(self)
+        except Exception as e:
+            logger.warning(f"[DASHBOARD UPDATE] {e}")
 
 
     def _sync_balance(self):
