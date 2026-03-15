@@ -1,19 +1,10 @@
 """
 Risk Manager v5 — Production Stable
 ════════════════════════════════════
-
-Fix:
-✓ futures sizing corretto
-✓ exchange sync
-✓ exposure cap
-✓ correlation clusters
-✓ SL cooldown dinamico
-✓ thread safe
 """
 
 import time
 import threading
-from datetime import datetime, timezone
 from loguru import logger
 from trading_bot.config import settings
 
@@ -53,6 +44,7 @@ def _get_cluster(symbol: str):
 
     return None
 
+
 class RiskManager:
 
     def __init__(self):
@@ -69,7 +61,6 @@ class RiskManager:
 
         self.daily_pnl = 0
         self.daily_reset_ts = 0
-
         self.daily_trades = 0
 
         self.wins = 0
@@ -91,41 +82,45 @@ class RiskManager:
 # STATS
 # ==========================================================
 
-def stats(self):
+    def stats(self):
 
-    try:
+        try:
 
-        open_trades = self.all_open_trades()
+            open_trades = self.all_open_trades()
 
-        total_open = len(open_trades)
+            total_open = len(open_trades)
 
-        wins = getattr(self, "wins", 0)
-        losses = getattr(self, "losses", 0)
+            wins = self.wins
+            losses = self.losses
 
-        total_closed = wins + losses
+            total_closed = wins + losses
 
-        winrate = 0
+            winrate = 0
 
-        if total_closed > 0:
-            winrate = round((wins / total_closed) * 100, 2)
+            if total_closed > 0:
+                winrate = round((wins / total_closed) * 100, 2)
 
-        return {
-            "open_trades": total_open,
-            "wins": wins,
-            "losses": losses,
-            "winrate": winrate,
-            "session_start_balance": getattr(self, "session_start_balance", 0),
-            "peak_balance": getattr(self, "peak_balance", 0),
-        }
+            return {
+                "open_trades": total_open,
+                "wins": wins,
+                "losses": losses,
+                "winrate": winrate,
+                "session_start_balance": self.session_start_balance,
+                "peak_balance": self.peak_balance,
+                "daily_pnl": self.daily_pnl,
+                "daily_trades": self.daily_trades
+            }
 
-    except Exception:
+        except Exception as e:
 
-        return {
-            "open_trades": 0,
-            "wins": 0,
-            "losses": 0,
-            "winrate": 0
-        }
+            logger.warning(f"[RISK] stats error {e}")
+
+            return {
+                "open_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "winrate": 0
+            }
 
 
 # ==========================================================
@@ -150,7 +145,7 @@ def stats(self):
 
             with Session(engine) as s:
 
-                trades = s.query(Trade).filter(Trade.status=="open").all()
+                trades = s.query(Trade).filter(Trade.status == "open").all()
 
             with self._lock:
 
@@ -158,20 +153,20 @@ def stats(self):
 
                     td = {
 
-                        "order_id":t.order_id,
-                        "side":t.side,
-                        "entry":t.entry_price,
-                        "size":t.size,
-                        "stop_loss":t.stop_loss,
-                        "take_profit":t.take_profit,
-                        "atr":t.atr,
-                        "open_ts":time.time()
+                        "order_id": t.order_id,
+                        "side": t.side,
+                        "entry": t.entry_price,
+                        "size": t.size,
+                        "stop_loss": t.stop_loss,
+                        "take_profit": t.take_profit,
+                        "atr": t.atr,
+                        "open_ts": time.time()
                     }
 
-                    if t.market=="spot":
-                        self.open_spot[t.symbol]=td
+                    if t.market == "spot":
+                        self.open_spot[t.symbol] = td
                     else:
-                        self.open_futures[t.symbol]=td
+                        self.open_futures[t.symbol] = td
 
                     self._pending_symbols.add(_normalize_base(t.symbol))
 
@@ -186,9 +181,9 @@ def stats(self):
 # SYMBOL LOCK
 # ==========================================================
 
-    def reserve_symbol(self,symbol):
+    def reserve_symbol(self, symbol):
 
-        base=_normalize_base(symbol)
+        base = _normalize_base(symbol)
 
         with self._lock:
 
@@ -200,9 +195,9 @@ def stats(self):
             return True
 
 
-    def release_symbol(self,symbol):
+    def release_symbol(self, symbol):
 
-        base=_normalize_base(symbol)
+        base = _normalize_base(symbol)
 
         with self._lock:
 
@@ -213,87 +208,84 @@ def stats(self):
 # EXCHANGE SYNC
 # ==========================================================
 
-    def force_close(self,symbol,market):
+    def force_close(self, symbol, market):
 
         with self._lock:
 
-            store=self.open_spot if market=="spot" else self.open_futures
+            store = self.open_spot if market == "spot" else self.open_futures
 
-            store.pop(symbol,None)
+            store.pop(symbol, None)
 
 
 # ==========================================================
 # POSITION SIZING
 # ==========================================================
 
-    def position_size(self,balance,entry,stop_loss,atr=None,market="spot",risk_multiplier=1.0,symbol=""):
+    def position_size(self, balance, entry, stop_loss, atr=None, market="spot", risk_multiplier=1.0, symbol=""):
 
-        risk_pct=settings.MAX_RISK_PCT/100
+        risk_pct = settings.MAX_RISK_PCT / 100
 
-        risk_pct*=risk_multiplier
+        risk_pct *= risk_multiplier
 
-        risk_pct*=self._correlation_discount(symbol)
+        risk_pct *= self._correlation_discount(symbol)
 
-        risk_pct=min(risk_pct,0.12)
+        risk_pct = min(risk_pct, 0.12)
 
-        risk_amount=balance*risk_pct
+        risk_amount = balance * risk_pct
 
-        risk_per_unit=abs(entry-stop_loss)
+        risk_per_unit = abs(entry - stop_loss)
 
-        if risk_per_unit<=0:
+        if risk_per_unit <= 0:
             return 0
 
-        units=risk_amount/risk_per_unit
+        units = risk_amount / risk_per_unit
 
-        size=units/entry
+        size = units / entry
 
-        max_notional=balance*0.35
+        max_notional = balance * 0.35
 
-        notional=size*entry
+        notional = size * entry
 
-        if notional>max_notional:
+        if notional > max_notional:
+            size = max_notional / entry
 
-            size=max_notional/entry
+        min_notional = 6
 
-        min_notional=6
-
-        if size*entry<min_notional:
-
+        if size * entry < min_notional:
             return 0
 
         logger.info(f"[SIZING] {symbol} size={size:.4f}")
 
-        return round(size,6)
+        return round(size, 6)
 
 
 # ==========================================================
 # CORRELATION
 # ==========================================================
 
-    def _correlation_discount(self,symbol):
+    def _correlation_discount(self, symbol):
 
-        cluster=_get_cluster(symbol)
+        cluster = _get_cluster(symbol)
 
         if cluster is None:
             return 1
 
-        count=0
+        count = 0
 
         with self._lock:
 
-            for s in list(self.open_spot)+list(self.open_futures):
+            for s in list(self.open_spot) + list(self.open_futures):
 
-                if _get_cluster(s)==cluster:
+                if _get_cluster(s) == cluster:
+                    count += 1
 
-                    count+=1
-
-        if count>=3:
+        if count >= 3:
             return 0.4
 
-        if count==2:
+        if count == 2:
             return 0.6
 
-        if count==1:
+        if count == 1:
             return 0.8
 
         return 1
@@ -303,94 +295,94 @@ def stats(self):
 # STOPS
 # ==========================================================
 
-    def trailing_stop(self,trade,current_price):
+    def trailing_stop(self, trade, current_price):
 
-        trail=settings.TRAILING_STOP_PCT/100
+        trail = settings.TRAILING_STOP_PCT / 100
 
-        atr=trade.get("atr",0)
+        atr = trade.get("atr", 0)
 
-        entry=trade.get("entry",current_price)
+        entry = trade.get("entry", current_price)
 
-        atr_ratio=atr/entry if entry>0 else 0
+        atr_ratio = atr / entry if entry > 0 else 0
 
-        trail=max(trail,atr_ratio*1.2)
+        trail = max(trail, atr_ratio * 1.2)
 
-        if trade["side"]=="buy":
+        if trade["side"] == "buy":
 
-            return max(trade["stop_loss"],current_price*(1-trail))
+            return max(trade["stop_loss"], current_price * (1 - trail))
 
-        return min(trade["stop_loss"],current_price*(1+trail))
+        return min(trade["stop_loss"], current_price * (1 + trail))
 
 
 # ==========================================================
 # CLOSE CONDITIONS
 # ==========================================================
 
-    def should_close(self,trade,current_price):
+    def should_close(self, trade, current_price):
 
-        side=trade["side"]
+        side = trade["side"]
 
-        sl=trade.get("stop_loss")
+        sl = trade.get("stop_loss")
 
-        tp=trade.get("take_profit")
+        tp = trade.get("take_profit")
 
-        if side=="buy":
+        if side == "buy":
 
-            if current_price<=sl:
-                return True,"stop_loss"
+            if current_price <= sl:
+                return True, "stop_loss"
 
-            if tp and current_price>=tp:
-                return True,"take_profit"
+            if tp and current_price >= tp:
+                return True, "take_profit"
 
         else:
 
-            if current_price>=sl:
-                return True,"stop_loss"
+            if current_price >= sl:
+                return True, "stop_loss"
 
-            if tp and current_price<=tp:
-                return True,"take_profit"
+            if tp and current_price <= tp:
+                return True, "take_profit"
 
-        return False,""
+        return False, ""
 
 
 # ==========================================================
 # TRADE TRACKING
 # ==========================================================
 
-    def register_open(self,symbol,trade,market):
+    def register_open(self, symbol, trade, market):
 
         with self._lock:
 
-            store=self.open_spot if market=="spot" else self.open_futures
+            store = self.open_spot if market == "spot" else self.open_futures
 
-            store[symbol]=trade
+            store[symbol] = trade
 
         logger.info(f"[OPEN] {symbol}")
 
 
-    def register_close(self,symbol,pnl_pct,market,reason=""):
+    def register_close(self, symbol, pnl_pct, market, reason=""):
 
-        base=_normalize_base(symbol)
+        base = _normalize_base(symbol)
 
         with self._lock:
 
-            store=self.open_spot if market=="spot" else self.open_futures
+            store = self.open_spot if market == "spot" else self.open_futures
 
-            store.pop(symbol,None)
+            store.pop(symbol, None)
 
-            if reason=="stop_loss":
+            if reason == "stop_loss":
 
-                cooldown=3600 if pnl_pct<-3 else 900
+                cooldown = 3600 if pnl_pct < -3 else 900
 
-                self._sl_cooldown[base]=time.time()+cooldown
+                self._sl_cooldown[base] = time.time() + cooldown
 
-        if pnl_pct>0:
+        if pnl_pct > 0:
 
-            self.wins+=1
+            self.wins += 1
 
         else:
 
-            self.losses+=1
+            self.losses += 1
 
 
 # ==========================================================
@@ -401,14 +393,14 @@ def stats(self):
 
         with self._lock:
 
-            trades=[]
+            trades = []
 
-            for s,t in self.open_spot.items():
+            for s, t in self.open_spot.items():
 
-                trades.append({**t,"symbol":s,"market":"spot"})
+                trades.append({**t, "symbol": s, "market": "spot"})
 
-            for s,t in self.open_futures.items():
+            for s, t in self.open_futures.items():
 
-                trades.append({**t,"symbol":s,"market":"futures"})
+                trades.append({**t, "symbol": s, "market": "futures"})
 
         return trades
