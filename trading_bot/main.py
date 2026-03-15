@@ -158,11 +158,8 @@ class TradingBot:
         while self._running:
 
             try:
-
                 schedule.run_pending()
-
             except Exception as e:
-
                 logger.error(f"[MAIN LOOP] {e}")
 
             time.sleep(3)
@@ -244,6 +241,138 @@ class TradingBot:
 
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
+
+
+# --------------------------------------------------
+# SCAN SWING
+# --------------------------------------------------
+
+    def _scan_swing_if_candle_closed(self):
+
+        now = datetime.now(timezone.utc)
+
+        if now.minute % 15 == 0 and now.second < 5:
+
+            time.sleep(3)
+
+            self._scan_swing()
+
+
+    def _scan_swing(self):
+
+        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD","BOLLINGER")]
+
+        if not strategies:
+            return
+
+        for symbol in settings.SPOT_SYMBOLS:
+
+            try:
+
+                df = ohlcv_to_df(
+                    self.exchange.fetch_ohlcv(
+                        symbol,
+                        settings.TF_SWING,
+                        300,
+                        "spot"
+                    )
+                )
+
+                for strat in strategies:
+
+                    signal = strat.analyze(df, symbol, "spot")
+
+                    if signal:
+                        logger.info(f"[SIGNAL] {symbol}")
+
+            except Exception as e:
+
+                logger.error(f"[SWING] {symbol} {e}")
+
+
+# --------------------------------------------------
+# BREAKOUT
+# --------------------------------------------------
+
+    def _scan_breakout(self):
+
+        logger.debug("[SCAN] breakout")
+
+
+# --------------------------------------------------
+# SCALPING
+# --------------------------------------------------
+
+    def _scan_scalping(self):
+
+        logger.debug("[SCAN] scalping")
+
+
+# --------------------------------------------------
+# EMERGING
+# --------------------------------------------------
+
+    def _scan_emerging(self):
+
+        try:
+
+            coins = self._emerging.scan()
+
+            if coins:
+                logger.info(f"[EMERGING] {len(coins)} coins")
+
+        except Exception as e:
+
+            logger.error(f"[EMERGING] {e}")
+
+
+# --------------------------------------------------
+# POSITIONS
+# --------------------------------------------------
+
+    def _monitor_positions(self):
+
+        try:
+
+            trades = self.risk.all_open_trades()
+
+            for t in trades:
+
+                logger.debug(f"[MONITOR] {t['symbol']}")
+
+        except Exception as e:
+
+            logger.error(f"[MONITOR] {e}")
+
+
+# --------------------------------------------------
+# REGIME
+# --------------------------------------------------
+
+    def _check_regime(self):
+
+        try:
+
+            self._regime.evaluate(self)
+
+        except Exception as e:
+
+            logger.error(f"[REGIME] {e}")
+
+
+# --------------------------------------------------
+# REBALANCE
+# --------------------------------------------------
+
+    def _auto_rebalance(self):
+
+        try:
+
+            self.exchange.auto_rebalance()
+
+        except Exception as e:
+
+            logger.debug(f"[REBALANCE] {e}")
 
 
 # --------------------------------------------------
