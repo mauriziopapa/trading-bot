@@ -282,7 +282,7 @@ class DynamicSettings:
     @property
     def BITGET_API_PASSPHRASE(self) -> str:  return os.getenv("BITGET_API_PASSPHRASE", "")
     @property
-    def TRADING_MODE(self)  -> str:  return os.getenv("TRADING_MODE", "paper")
+    def TRADING_MODE(self)  -> str:  return os.getenv("TRADING_MODE", "live")
     @property
     def IS_LIVE(self)       -> bool: return self.TRADING_MODE == "live"
     @property
