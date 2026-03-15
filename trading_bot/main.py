@@ -1,15 +1,17 @@
 """
-Bitget Trading Bot — Main Orchestrator v8.1
+Bitget Trading Bot — Main Orchestrator v9.1
 ═══════════════════════════════════════════
 
-Fix:
-✓ remove get_position dependency
-✓ stable close logic
-✓ ticker safety
-✓ exchange sync protection
-✓ dashboard log compatibility
+Features
+✓ Dashboard auto start
+✓ Telegram notifier
+✓ Position Sync Engine
+✓ Stable position monitor
+✓ Exchange sync protection
+✓ Dashboard log integration
 """
 
+import threading
 import time
 import schedule
 from datetime import datetime, timezone
@@ -21,12 +23,15 @@ from trading_bot.utils.exchange import BitgetExchange
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.utils.notifier import TelegramNotifier
 from trading_bot.utils.indicators import ohlcv_to_df
+
 from trading_bot.models.database import DB
 
 from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
+
+from trading_bot.dashboard.server import start_dashboard
 
 
 ENTRY_DELAY_SECONDS = 2
@@ -44,6 +49,8 @@ class TradingBot:
 
         self._last_trade = {}
 
+        self._running = True
+
         self.strategies = []
 
         if settings.ENABLE_RSI_MACD:
@@ -58,8 +65,6 @@ class TradingBot:
         if settings.ENABLE_SCALPING:
             self.strategies.append(ScalpingStrategy())
 
-        self._running = True
-
 
 # ==========================================================
 # START
@@ -67,22 +72,25 @@ class TradingBot:
 
     def start(self):
 
-        logger.info("Starting Trading Bot v8.1")
+        logger.info("Starting Trading Bot v9.1")
 
         self.exchange.initialize()
+
         self.db.connect()
 
         self.risk.recover_from_db()
 
+        logger.info(
+            f"[BOOT] trades recoverati: {len(self.risk.all_open_trades())}"
+        )
+
         self._sync_balance()
 
-        schedule.every().minute.do(self._scan_swing_if_candle_closed)
-        schedule.every().minute.do(self._scan_breakout_if_candle_closed)
+        self._start_dashboard()
 
-        if settings.ENABLE_SCALPING:
-            schedule.every(45).seconds.do(self._scan_scalping)
+        self.notifier.send("🤖 Trading Bot avviato")
 
-        schedule.every(10).seconds.do(self._monitor_positions)
+        self._setup_scheduler()
 
         logger.info("Bot operativo")
 
@@ -94,7 +102,52 @@ class TradingBot:
 
 
 # ==========================================================
-# SCANS
+# DASHBOARD
+# ==========================================================
+
+    def _start_dashboard(self):
+
+        try:
+
+            thread = threading.Thread(
+                target=start_dashboard,
+                daemon=True
+            )
+
+            thread.start()
+
+            logger.info("[DASHBOARD] avviata")
+
+        except Exception as e:
+
+            logger.warning(f"Dashboard error {e}")
+
+
+# ==========================================================
+# SCHEDULER
+# ==========================================================
+
+    def _setup_scheduler(self):
+
+        schedule.every().minute.do(self._scan_swing_if_candle_closed)
+
+        schedule.every().minute.do(self._scan_breakout_if_candle_closed)
+
+        if settings.ENABLE_SCALPING:
+
+            schedule.every(45).seconds.do(self._scan_scalping)
+
+        schedule.every(10).seconds.do(self._monitor_positions)
+
+        schedule.every(60).seconds.do(self._sync_positions)
+
+        schedule.every(10).minutes.do(self._auto_rebalance)
+
+        schedule.every(1).hours.do(self._health_check)
+
+
+# ==========================================================
+# MARKET SCANS
 # ==========================================================
 
     def _scan_swing_if_candle_closed(self):
@@ -150,7 +203,7 @@ class TradingBot:
 
                 except Exception as e:
 
-                    logger.error(f"[swing] {symbol} {e}")
+                    logger.error(f"[SWING] {symbol} {e}")
 
 
     def _scan_breakout(self):
@@ -183,7 +236,40 @@ class TradingBot:
 
                 except Exception as e:
 
-                    logger.error(f"[breakout] {symbol} {e}")
+                    logger.error(f"[BREAKOUT] {symbol} {e}")
+
+
+    def _scan_scalping(self):
+
+        strategy = next((s for s in self.strategies if s.NAME == "SCALPING"), None)
+
+        if not strategy:
+            return
+
+        for market, symbols in self._market_symbol_pairs():
+
+            for symbol in symbols:
+
+                try:
+
+                    df = ohlcv_to_df(
+                        self.exchange.fetch_ohlcv(
+                            symbol,
+                            settings.TF_SCALP,
+                            100,
+                            market
+                        )
+                    )
+
+                    signal = strategy.analyze(df, symbol, market)
+
+                    if signal:
+
+                        self._process_signal(signal)
+
+                except Exception as e:
+
+                    logger.error(f"[SCALP] {symbol} {e}")
 
 
 # ==========================================================
@@ -212,11 +298,11 @@ class TradingBot:
 
         except Exception as e:
 
-            logger.error(f"[SIG] {signal.symbol} {e}")
+            logger.error(f"[SIGNAL] {signal.symbol} {e}")
 
 
 # ==========================================================
-# EXECUTION
+# ORDER EXECUTION
 # ==========================================================
 
     def _execute_signal(self, signal):
@@ -251,14 +337,13 @@ class TradingBot:
             side=signal.side,
             amount=size,
             market=signal.market,
-            params=params,
+            params=params
         )
 
         if not order:
             return
 
         trade_data = {
-
             "entry": signal.entry,
             "size": size,
             "side": signal.side,
@@ -271,6 +356,10 @@ class TradingBot:
 
         logger.info(
             f"TRADE OPEN {signal.symbol} {signal.side} size={size}"
+        )
+
+        self.notifier.send(
+            f"🟢 TRADE OPEN {signal.symbol}\nSide: {signal.side}\nSize: {size}"
         )
 
 
@@ -305,11 +394,11 @@ class TradingBot:
 
             except Exception as e:
 
-                logger.error(f"[monitor] {symbol} {e}")
+                logger.error(f"[MONITOR] {symbol} {e}")
 
 
 # ==========================================================
-# CLOSE POSITION (FIXED)
+# CLOSE POSITION
 # ==========================================================
 
     def _close_position(self, symbol, market, trade, price, reason):
@@ -323,29 +412,27 @@ class TradingBot:
                 side=side,
                 amount=trade["size"],
                 market=market,
-                params={"reduceOnly": True} if market == "futures" else {},
+                params={"reduceOnly": True} if market == "futures" else {}
             )
 
             if not order:
-
-                logger.warning(f"[CLOSE] failed {symbol}")
-
                 return
 
             entry = trade.get("entry", price)
 
             if trade["side"] == "buy":
-
                 pnl_pct = (price - entry) / entry * 100
-
             else:
-
                 pnl_pct = (entry - price) / entry * 100
 
             self.risk.register_close(symbol, pnl_pct, market, reason)
 
             logger.info(
                 f"TRADE CLOSED {symbol} reason={reason} pnl={pnl_pct:.2f}%"
+            )
+
+            self.notifier.send(
+                f"🔴 TRADE CLOSED {symbol}\nReason: {reason}\nPnL: {pnl_pct:.2f}%"
             )
 
         except Exception as e:
@@ -360,6 +447,41 @@ class TradingBot:
 
 
 # ==========================================================
+# POSITION SYNC
+# ==========================================================
+
+    def _sync_positions(self):
+
+        try:
+
+            exchange_positions = self.exchange.fetch_positions()
+
+            exchange_symbols = {
+                p["symbol"] for p in exchange_positions
+            }
+
+            for trade in self.risk.all_open_trades():
+
+                sym = trade["symbol"]
+                market = trade["market"]
+
+                if market != "futures":
+                    continue
+
+                if sym not in exchange_symbols:
+
+                    logger.warning(
+                        f"[SYNC] posizione non presente su exchange → {sym}"
+                    )
+
+                    self.risk.force_close(sym, market)
+
+        except Exception as e:
+
+            logger.warning(f"[SYNC] errore sincronizzazione: {e}")
+
+
+# ==========================================================
 # BALANCE
 # ==========================================================
 
@@ -368,7 +490,6 @@ class TradingBot:
         try:
 
             s = self.exchange.get_usdt_balance("spot")
-
             f = self.exchange.get_usdt_balance("futures")
 
             self.risk.session_start_balance = s + f
@@ -377,6 +498,30 @@ class TradingBot:
         except Exception as e:
 
             logger.warning(e)
+
+
+# ==========================================================
+# REBALANCE
+# ==========================================================
+
+    def _auto_rebalance(self):
+
+        try:
+
+            self.exchange.auto_rebalance()
+
+        except Exception as e:
+
+            logger.warning(f"[REBALANCE] {e}")
+
+
+# ==========================================================
+# HEALTH CHECK
+# ==========================================================
+
+    def _health_check(self):
+
+        logger.info("health check")
 
 
 # ==========================================================
