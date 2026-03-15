@@ -1,6 +1,6 @@
 """
-Bitget Trading Bot — Main Orchestrator v6.7
-Stable + Dashboard + Emerging Trading
+Bitget Trading Bot — Main Orchestrator v7
+Stable + Dashboard + Emerging Momentum Trading
 """
 
 import os
@@ -131,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v6.7")
+        logger.info("BITGET TRADING BOT v7")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -158,7 +158,6 @@ class TradingBot:
             )
 
         except Exception as e:
-
             logger.warning(f"telegram startup {e}")
 
         self._setup_scheduler()
@@ -237,7 +236,7 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# BALANCE SYNC
+# BALANCE
 # --------------------------------------------------
 
     def _sync_balance(self):
@@ -259,51 +258,26 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# SWING SCAN
+# MOMENTUM RANK
 # --------------------------------------------------
 
-    def _scan_swing_if_candle_closed(self):
+    def _rank_emerging(self, coins):
 
-        now = datetime.now(timezone.utc)
+        ranked = []
 
-        if now.minute % 15 == 0 and now.second < 5:
+        for c in coins:
 
-            time.sleep(2)
+            score = (
+                c.get("score", 0) * 0.5 +
+                abs(c.get("change", 0)) * 0.3 +
+                c.get("surge", 1) * 10 * 0.2
+            )
 
-            self._scan_swing()
+            ranked.append((score, c))
 
+        ranked.sort(reverse=True)
 
-    def _scan_swing(self):
-
-        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
-
-        for symbol in settings.SPOT_SYMBOLS:
-
-            try:
-
-                df = ohlcv_to_df(
-                    self.exchange.fetch_ohlcv(
-                        symbol,
-                        settings.TF_SWING,
-                        300,
-                        "spot"
-                    )
-                )
-
-                for strat in strategies:
-
-                    signal = strat.analyze(df, symbol, "spot")
-
-                    if signal:
-
-                        logger.info(f"[SIGNAL] {symbol}")
-
-                        self._track_signal(signal)
-
-                        self._process_signal(signal)
-
-            except Exception as e:
-                logger.debug(f"[SWING] {symbol} {e}")
+        return [c for _, c in ranked]
 
 
 # --------------------------------------------------
@@ -317,7 +291,9 @@ class TradingBot:
         if not strategies:
             return
 
-        for symbol in settings.SPOT_SYMBOLS:
+        symbols = settings.SPOT_SYMBOLS[:15]
+
+        for symbol in symbols:
 
             try:
 
@@ -342,8 +318,8 @@ class TradingBot:
 
                         self._process_signal(signal)
 
-            except Exception as e:
-                logger.debug(f"[SCALPING] {symbol} {e}")
+            except Exception:
+                pass
 
 
 # --------------------------------------------------
@@ -359,7 +335,13 @@ class TradingBot:
             if not coins:
                 return
 
-            for coin in coins[:10]:
+            ranked = self._rank_emerging(coins)
+
+            top = ranked[:5]
+
+            logger.info(f"[EMERGING] top {[c['symbol'] for c in top]}")
+
+            for coin in top:
 
                 symbol = f"{coin['symbol'].upper()}/USDT"
 
@@ -412,6 +394,11 @@ class TradingBot:
 # --------------------------------------------------
 
     def _process_signal(self, signal):
+
+        stats = self.risk.stats()
+
+        if stats["open_trades"] >= 3:
+            return
 
         try:
 
@@ -476,23 +463,23 @@ class TradingBot:
             )
 
             self.notifier.trade_opened(
-                                            symbol=signal.symbol,
-                                            side=signal.side,
-                                            size=size,
-                                            entry=signal.entry,
-                                            stop_loss=signal.stop_loss,
-                                            take_profit=signal.take_profit,
-                                            market=signal.market,
-                                            strategy=signal.strategy,
-                                            confidence=signal.confidence
-                                        )
+                symbol=signal.symbol,
+                side=signal.side,
+                size=size,
+                entry=signal.entry,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                market=signal.market,
+                strategy=signal.strategy,
+                confidence=signal.confidence
+            )
 
         except Exception as e:
             logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
-# MONITOR
+# MONITOR POSITIONS
 # --------------------------------------------------
 
     def _monitor_positions(self):
@@ -513,20 +500,8 @@ class TradingBot:
                 close, reason = self.risk.should_close(trade, price)
 
                 if close:
+
                     self._close_position(symbol, market, trade, price, reason)
-
-                    pnl_usdt = trade["size"] * entry * (pnl_pct / 100)
-
-                    self.notifier.trade_closed(
-                        symbol=symbol,
-                        side=trade["side"],
-                        entry=entry,
-                        exit_price=exit_price,
-                        pnl_pct=pnl_pct,
-                        pnl_usdt=pnl_usdt,
-                        reason=reason,
-                        market=market
-                    )
 
             except Exception as e:
                 logger.error(f"[MONITOR] {e}")
@@ -556,7 +531,20 @@ class TradingBot:
             if trade["side"] == "sell":
                 pnl_pct *= -1
 
+            pnl_usdt = trade["size"] * entry * (pnl_pct / 100)
+
             self.risk.register_close(symbol, pnl_pct, market, reason)
+
+            self.notifier.trade_closed(
+                symbol=symbol,
+                side=trade["side"],
+                entry=entry,
+                exit_price=exit_price,
+                pnl_pct=pnl_pct,
+                pnl_usdt=pnl_usdt,
+                reason=reason,
+                market=market
+            )
 
             logger.info(f"CLOSE {symbol} {pnl_pct:+.2f}%")
 
