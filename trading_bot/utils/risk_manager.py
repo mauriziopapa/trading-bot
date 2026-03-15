@@ -53,6 +53,41 @@ def _get_cluster(symbol: str):
 
     return None
 
+def stats(self):
+
+    try:
+
+        open_trades = self.all_open_trades()
+
+        total_open = len(open_trades)
+
+        wins = getattr(self, "wins", 0)
+        losses = getattr(self, "losses", 0)
+
+        total_closed = wins + losses
+
+        winrate = 0
+
+        if total_closed > 0:
+            winrate = round((wins / total_closed) * 100, 2)
+
+        return {
+            "open_trades": total_open,
+            "wins": wins,
+            "losses": losses,
+            "winrate": winrate,
+            "session_start_balance": getattr(self, "session_start_balance", 0),
+            "peak_balance": getattr(self, "peak_balance", 0),
+        }
+
+    except Exception:
+
+        return {
+            "open_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "winrate": 0
+        }
 
 class RiskManager:
 
