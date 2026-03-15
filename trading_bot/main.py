@@ -1,6 +1,6 @@
 """
 Bitget Trading Bot — Main Orchestrator v5
-Production Stable + Dashboard Engine
+Production Stable + Dashboard + Telegram
 """
 
 import os
@@ -148,6 +148,24 @@ class TradingBot:
 
         self._sync_balance()
 
+        # TELEGRAM START MESSAGE
+        try:
+
+            spot = self.exchange.get_usdt_balance("spot")
+            futures = self.exchange.get_usdt_balance("futures")
+
+            self.notifier.startup(
+                settings.TRADING_MODE,
+                settings.SPOT_SYMBOLS,
+                settings.FUTURES_SYMBOLS,
+                spot,
+                futures
+            )
+
+        except Exception as e:
+
+            logger.warning(f"telegram startup {e}")
+
         self._setup_scheduler()
 
         if DASHBOARD_ENABLED:
@@ -158,9 +176,17 @@ class TradingBot:
         while self._running:
 
             try:
+
                 schedule.run_pending()
+
             except Exception as e:
+
                 logger.error(f"[MAIN LOOP] {e}")
+
+                try:
+                    self.notifier.error(f"MAIN LOOP ERROR\n{e}")
+                except:
+                    pass
 
             time.sleep(3)
 
