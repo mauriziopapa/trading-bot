@@ -31,7 +31,7 @@ from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
 
-from trading_bot.dashboard.server import start_dashboard
+from trading_bot.dashboard.server import app
 
 
 ENTRY_DELAY_SECONDS = 2
