@@ -1,6 +1,7 @@
 """
-Bitget Trading Bot — Main Orchestrator v6.1
+Bitget Trading Bot — Main Orchestrator v6.2
 Trading Enabled + Dashboard + Telegram
+High reliability execution
 """
 
 import os
@@ -130,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v6.1")
+        logger.info("BITGET TRADING BOT v6.2")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -145,7 +146,6 @@ class TradingBot:
 
         self._sync_balance()
 
-        # Telegram startup
         try:
 
             spot = self.exchange.get_usdt_balance("spot")
@@ -165,15 +165,23 @@ class TradingBot:
 
         self._setup_scheduler()
 
-        if DASHBOARD_ENABLED:
-            self._update_dashboard()
-
         logger.info("Bot operativo")
 
         while self._running:
 
             try:
                 schedule.run_pending()
+
+                if self.risk.drawdown_exceeded():
+
+                    logger.error("MAX DRAWDOWN STOP BOT")
+
+                    try:
+                        self.notifier.error("BOT STOPPED - MAX DRAWDOWN")
+                    except:
+                        pass
+
+                    self._running = False
 
             except Exception as e:
 
@@ -184,7 +192,7 @@ class TradingBot:
                 except:
                     pass
 
-            time.sleep(3)
+            time.sleep(2)
 
 
 # --------------------------------------------------
@@ -215,26 +223,15 @@ class TradingBot:
         logger.info(f"[DASHBOARD] running on :{port}")
 
 
-    def _update_dashboard(self):
-
-        if not DASHBOARD_ENABLED:
-            return
-
-        try:
-            write_state(self)
-        except Exception as e:
-            logger.warning(f"[DASHBOARD] update error {e}")
-
-
 # --------------------------------------------------
 # SCHEDULER
 # --------------------------------------------------
 
     def _setup_scheduler(self):
 
-        schedule.every(1).minutes.do(self._scan_swing_if_candle_closed)
+        schedule.every(15).minutes.do(self._scan_swing)
 
-        schedule.every(30).seconds.do(self._monitor_positions)
+        schedule.every(10).seconds.do(self._monitor_positions)
 
         schedule.every(3).minutes.do(self._scan_emerging)
 
@@ -244,77 +241,35 @@ class TradingBot:
 
         schedule.every(1).hours.do(self._health_check)
 
-        if DASHBOARD_ENABLED:
-            schedule.every(20).seconds.do(self._update_dashboard)
-
 
 # --------------------------------------------------
-# SWING SCAN
+# SAFE ORDER
 # --------------------------------------------------
 
-    def _scan_swing_if_candle_closed(self):
+    def _safe_market_order(self, symbol, side, amount, market, params):
 
-        now = datetime.now(timezone.utc)
-
-        if now.minute % 15 == 0 and now.second < 5:
-
-            time.sleep(3)
-
-            self._scan_swing()
-
-
-    def _scan_swing(self):
-
-        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
-
-        if not strategies:
-            return
-
-        symbols = settings.FUTURES_SYMBOLS if settings.FUTURES_SYMBOLS else settings.SPOT_SYMBOLS
-
-        market = "futures" if settings.FUTURES_SYMBOLS else "spot"
-
-        for symbol in symbols:
+        for attempt in range(3):
 
             try:
 
-                df = ohlcv_to_df(
-                    self.exchange.fetch_ohlcv(
-                        symbol,
-                        settings.TF_SWING,
-                        300,
-                        market
-                    )
+                order = self.exchange.create_market_order(
+                    symbol=symbol,
+                    side=side,
+                    amount=amount,
+                    market=market,
+                    params=params
                 )
 
-                for strat in strategies:
-
-                    signal = strat.analyze(df, symbol, market)
-
-                    if signal:
-
-                        logger.info(f"[SIGNAL] {symbol}")
-
-                        self._process_signal(signal)
+                if order:
+                    return order
 
             except Exception as e:
 
-                logger.error(f"[SWING] {symbol} {e}")
+                logger.warning(f"[ORDER RETRY {attempt}] {symbol} {e}")
 
+                time.sleep(2)
 
-# --------------------------------------------------
-# PROCESS SIGNAL
-# --------------------------------------------------
-
-    def _process_signal(self, signal):
-
-        if not self.risk.reserve_symbol(signal.symbol):
-            return
-
-        try:
-            self._execute_signal(signal)
-        finally:
-            self.risk.release_symbol(signal.symbol)
+        return None
 
 
 # --------------------------------------------------
@@ -350,12 +305,12 @@ class TradingBot:
                     "marginMode": settings.MARGIN_MODE
                 }
 
-            order = self.exchange.create_market_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                amount=size,
-                market=signal.market,
-                params=params
+            order = self._safe_market_order(
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market,
+                params
             )
 
             if not order:
@@ -393,39 +348,6 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# MONITOR POSITIONS
-# --------------------------------------------------
-
-    def _monitor_positions(self):
-
-        try:
-
-            trades = self.risk.all_open_trades()
-
-            for trade in trades:
-
-                ticker = self.exchange.fetch_ticker(trade["symbol"], trade["market"])
-
-                price = float(ticker["last"])
-
-                close, reason = self.risk.should_close(trade, price)
-
-                if close:
-
-                    self._close_position(
-                        trade["symbol"],
-                        trade["market"],
-                        trade,
-                        price,
-                        reason
-                    )
-
-        except Exception as e:
-
-            logger.error(f"[MONITOR] {e}")
-
-
-# --------------------------------------------------
 # CLOSE POSITION
 # --------------------------------------------------
 
@@ -435,25 +357,24 @@ class TradingBot:
 
             side = "sell" if trade["side"] == "buy" else "buy"
 
-            order = self.exchange.create_market_order(
-                symbol=symbol,
-                side=side,
-                amount=trade["size"],
-                market=market,
-                params={"reduceOnly": True} if market == "futures" else {}
+            order = self._safe_market_order(
+                symbol,
+                side,
+                trade["size"],
+                market,
+                {"reduceOnly": True} if market == "futures" else {}
             )
 
             if not order:
                 return
 
-            entry = trade["entry"]
+            entry = float(trade["entry"])
+            size = float(trade["size"])
 
-            pnl_pct = ((exit_price - entry) / entry) * 100
+            direction = 1 if trade["side"] == "buy" else -1
 
-            if trade["side"] == "sell":
-                pnl_pct *= -1
-
-            pnl_usdt = trade["size"] * entry * (pnl_pct / 100)
+            pnl_usdt = (exit_price - entry) * size * direction
+            pnl_pct = ((exit_price - entry) / entry) * 100 * direction
 
             self.risk.register_close(symbol, pnl_pct, market, reason)
 
@@ -479,12 +400,67 @@ class TradingBot:
 # SUPPORT
 # --------------------------------------------------
 
-    def _check_regime(self):
+    def _scan_swing(self):
+
+        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
+
+        symbols = settings.FUTURES_SYMBOLS if settings.FUTURES_SYMBOLS else settings.SPOT_SYMBOLS
+        market = "futures" if settings.FUTURES_SYMBOLS else "spot"
+
+        for symbol in symbols:
+
+            try:
+
+                df = ohlcv_to_df(
+                    self.exchange.fetch_ohlcv(
+                        symbol,
+                        settings.TF_SWING,
+                        300,
+                        market
+                    )
+                )
+
+                for strat in strategies:
+
+                    signal = strat.analyze(df, symbol, market)
+
+                    if signal:
+
+                        logger.info(f"[SIGNAL] {symbol}")
+
+                        self._execute_signal(signal)
+
+            except Exception as e:
+
+                logger.error(f"[SWING] {symbol} {e}")
+
+
+    def _monitor_positions(self):
 
         try:
-            self._regime.evaluate(self)
+
+            trades = self.risk.all_open_trades()
+
+            for trade in trades:
+
+                ticker = self.exchange.fetch_ticker(trade["symbol"], trade["market"])
+                price = float(ticker["last"])
+
+                close, reason = self.risk.should_close(trade, price)
+
+                if close:
+
+                    self._close_position(
+                        trade["symbol"],
+                        trade["market"],
+                        trade,
+                        price,
+                        reason
+                    )
+
         except Exception as e:
-            logger.error(f"[REGIME] {e}")
+
+            logger.error(f"[MONITOR] {e}")
 
 
     def _scan_emerging(self):
@@ -499,6 +475,14 @@ class TradingBot:
         except Exception as e:
 
             logger.error(f"[EMERGING] {e}")
+
+
+    def _check_regime(self):
+
+        try:
+            self._regime.evaluate(self)
+        except Exception as e:
+            logger.error(f"[REGIME] {e}")
 
 
     def _auto_rebalance(self):
@@ -520,7 +504,6 @@ class TradingBot:
             self.risk.peak_balance = s + f
 
         except Exception as e:
-
             logger.warning(e)
 
 
