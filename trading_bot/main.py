@@ -97,7 +97,7 @@ class TradingBot:
         except Exception as e: logger.warning(f"Balance: {e}")
         self.notifier.startup(settings.TRADING_MODE, settings.SPOT_SYMBOLS if "spot" in settings.MARKET_TYPES else [], settings.FUTURES_SYMBOLS if "futures" in settings.MARKET_TYPES else [], _bs, _bf)
         self._check_regime()
-        if settings.ENABLE_RSI_MACD or settings.ENABLE_BOLLINGER: schedule.every(2).minutes.do(self._scan_swing)
+        if settings.ENABLE_RSI_MACD or settings.ENABLE_BOLLINGER: schedule.every().minutes.do(self._scan_swing_if_candle_closed)
         if settings.ENABLE_BREAKOUT: schedule.every(5).minutes.do(self._scan_breakout)
         if settings.ENABLE_SCALPING: schedule.every(45).seconds.do(self._scan_scalping)
         schedule.every(3).minutes.do(self._scan_emerging)
@@ -157,6 +157,16 @@ class TradingBot:
                         if sig: self._process_signal(sig)
                 except Exception as e: logger.error(f"[swing] {sym}: {e}")
 
+   def _scan_swing_if_candle_closed(self):
+    now = datetime.now(timezone.utc)
+
+    # candela 15m chiusa
+    if now.minute % 15 == 0 and now.second < 5:
+        time.sleep(3)  # delay sicurezza
+        self._scan_swing()
+
+
+  
     def _scan_breakout(self):
         st = next((s for s in self.strategies if s.NAME=="BREAKOUT"), None)
         if not st: return
@@ -306,6 +316,7 @@ class TradingBot:
 
     def _close_position(self, sym, mkt, trade, exit_p, reason):
         cs = "sell" if trade["side"]=="buy" else "buy"
+        time.sleep(2)
         order = self.exchange.create_market_order(symbol=sym, side=cs, amount=trade["size"], market=mkt, params={"reduceOnly":True} if mkt=="futures" else {})
         if not order and settings.IS_LIVE: return
         entry = trade["entry"]; mult = settings.DEFAULT_LEVERAGE if mkt=="futures" else 1
