@@ -1,21 +1,16 @@
 """
-Bitget Trading Bot — Main Orchestrator v6
-Trading Enabled + Dashboard + Telegram
+Bitget Trading Bot — Main Orchestrator v7
+Stable production version
 """
 
 import time
 import schedule
-import threading
-
-from datetime import datetime, timezone
 from loguru import logger
 
 from trading_bot.config import settings
 from trading_bot.utils.exchange import BitgetExchange
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.utils.notifier import TelegramNotifier
-from trading_bot.utils.indicators import ohlcv_to_df
-
 from trading_bot.models.database import DB
 
 from trading_bot.strategies.rsi_macd import RSIMACDStrategy
@@ -25,68 +20,7 @@ from trading_bot.strategies.scalping import ScalpingStrategy
 
 from trading_bot.utils.regime_detector import RegimeDetector
 from trading_bot.utils.emerging_scanner import EmergingScanner
-from trading_bot.utils.regime_detector import RegimeDetector
 
-
-# --------------------------------------------------
-# DASHBOARD
-# --------------------------------------------------
-
-if settings.ENABLE_DASHBOARD:
-    try:
-        from trading_bot.dashboard.state_writer import write_state
-        DASHBOARD_ENABLED = True
-    except:
-        DASHBOARD_ENABLED = False
-else:
-    DASHBOARD_ENABLED = False
-
-_bot_ref = None
-
-
-# --------------------------------------------------
-# LOGGER
-# --------------------------------------------------
-
-def _setup_logger():
-
-    os.makedirs("logs", exist_ok=True)
-
-    logger.remove()
-
-    logger.add(
-        "logs/bot.log",
-        rotation="50 MB",
-        retention="14 days",
-        level=settings.LOG_LEVEL,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {message}",
-    )
-
-    logger.add(
-        lambda msg: print(msg, end=""),
-        level=settings.LOG_LEVEL,
-        colorize=True,
-    )
-
-    def _dash_log(msg):
-
-        if _bot_ref is None:
-            return
-
-        _bot_ref._recent_logs.append({
-            "ts": msg.record["time"].isoformat(),
-            "level": msg.record["level"].name,
-            "msg": msg.record["message"]
-        })
-
-        _bot_ref._recent_logs = _bot_ref._recent_logs[-200:]
-
-    logger.add(_dash_log, level="DEBUG")
-
-
-# --------------------------------------------------
-# BOT
-# --------------------------------------------------
 
 class TradingBot:
 
@@ -116,17 +50,12 @@ class TradingBot:
 
     def start(self):
 
-        logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v6")
-        logger.info("════════════════════════════════════")
-
-        if DASHBOARD_ENABLED:
-            self._start_dashboard()
+        logger.info("══════════════════════════════")
+        logger.info("BITGET TRADING BOT v7")
+        logger.info("══════════════════════════════")
 
         self.exchange.initialize()
         self.db.connect()
-
-        self.risk.recover_from_db()
 
         self._sync_balance()
 
@@ -140,52 +69,36 @@ class TradingBot:
 
                 schedule.run_pending()
 
+                self._risk_guard()
+
             except Exception as e:
 
                 logger.error(f"[MAIN LOOP] {e}")
 
-            time.sleep(3)
+            time.sleep(2)
 
 
-# --------------------------------------------------
-# DASHBOARD
-# --------------------------------------------------
+# ==========================================================
+# RISK GUARD
+# ==========================================================
 
-    def _start_dashboard(self):
+    def _risk_guard(self):
 
-        import uvicorn
+        spot = self.exchange.get_usdt_balance("spot")
+        futures = self.exchange.get_usdt_balance("futures")
 
-        port = int(os.environ.get("PORT", settings.DASHBOARD_PORT))
+        balance = spot + futures
 
-        config = uvicorn.Config(
-            "trading_bot.dashboard.server:app",
-            host="0.0.0.0",
-            port=port,
-            log_level="warning",
-            access_log=False
-        )
+        if self.risk.drawdown_exceeded(balance):
 
-        server = uvicorn.Server(config)
+            logger.error("MAX DRAWDOWN STOP")
 
-        thread = threading.Thread(
-            target=server.run,
-            daemon=True
-        )
+            try:
+                self.notifier.error("BOT STOPPED MAX DD")
+            except:
+                pass
 
-        thread.start()
-
-        logger.info(f"[DASHBOARD] running on :{port}")
-
-
-    def _update_dashboard(self):
-
-        if not DASHBOARD_ENABLED:
-            return
-
-        try:
-            write_state(self)
-        except Exception as e:
-            logger.warning(f"[DASHBOARD] update error {e}")
+            self._running = False
 
 
 # ==========================================================
@@ -194,192 +107,134 @@ class TradingBot:
 
     def _setup_scheduler(self):
 
-        schedule.every(1).minutes.do(self._scan_swing_if_candle_closed)
+        schedule.every(15).minutes.do(self._scan_market)
 
-        if settings.ENABLE_BREAKOUT:
-            schedule.every(5).minutes.do(self._scan_breakout)
-
-        if settings.ENABLE_SCALPING:
-            schedule.every(45).seconds.do(self._scan_scalping)
-
-        schedule.every(30).seconds.do(self._monitor_positions)
+        schedule.every(10).seconds.do(self._monitor_positions)
 
         schedule.every(3).minutes.do(self._scan_emerging)
 
         schedule.every(5).minutes.do(self._check_regime)
 
-        schedule.every(10).minutes.do(self._auto_rebalance)
-
         schedule.every(1).hours.do(self._health_check)
 
-        if DASHBOARD_ENABLED:
-            schedule.every(20).seconds.do(self._update_dashboard)
 
+# ==========================================================
+# MARKET SCAN
+# ==========================================================
 
-# --------------------------------------------------
-# SWING SCAN
-# --------------------------------------------------
+    def _scan_market(self):
 
-    def _scan_swing_if_candle_closed(self):
+        regime = self.regime.current_regime
 
-        now = datetime.now(timezone.utc)
+        allowed = self._strategies_for_regime(regime)
 
-        if now.minute % 15 == 0 and now.second < 5:
+        for strat in self.strategies:
 
-            time.sleep(3)
-
-            self._scan_swing()
-
-
-    def _scan_swing(self):
-
-        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
-
-        if not strategies:
-            return
-
-        for symbol in settings.SPOT_SYMBOLS:
+            if strat.NAME not in allowed:
+                continue
 
             try:
 
-                df = ohlcv_to_df(
-                    self.exchange.fetch_ohlcv(
-                        symbol,
-                        settings.TF_SWING,
-                        300,
-                        "spot"
-                    )
-                )
+                signals = strat.scan(self.exchange)
 
-                for strat in strategies:
+                for signal in signals:
 
-                    signal = strat.analyze(df, symbol, "spot")
-
-                    if signal:
-
-                        logger.info(f"[SIGNAL] {symbol}")
-
-                        self._process_signal(signal)
+                    self._process_signal(signal)
 
             except Exception as e:
 
-                logger.error(f"[SWING] {symbol} {e}")
+                logger.warning(f"[SCAN] {strat.NAME} {e}")
 
 
-# --------------------------------------------------
+# ==========================================================
+# REGIME STRATEGY
+# ==========================================================
+
+    def _strategies_for_regime(self, regime):
+
+        if regime == "trend":
+            return ["BREAKOUT"]
+
+        if regime == "range":
+            return ["BOLLINGER"]
+
+        if regime == "volatile":
+            return ["SCALPING"]
+
+        return ["RSI_MACD"]
+
+
+# ==========================================================
 # PROCESS SIGNAL
-# --------------------------------------------------
+# ==========================================================
 
     def _process_signal(self, signal):
 
-        try:
-
-            if not self.risk.reserve_symbol(signal.symbol):
-                return
-
-            self._execute_signal(signal)
-
-        finally:
-
-            self.risk.release_symbol(signal.symbol)
-
-
-# --------------------------------------------------
-# EXECUTE TRADE
-# --------------------------------------------------
-
-    def _execute_signal(self, signal):
+        if not self.risk.reserve_symbol(signal.symbol):
+            return
 
         try:
 
             balance = self.exchange.get_usdt_balance(signal.market)
 
-            if balance < 10:
-                return
-
             size = self.risk.position_size(
-                balance=balance,
-                entry=signal.entry,
-                stop_loss=signal.stop_loss,
-                atr=signal.atr,
-                market=signal.market,
+                balance,
+                signal.entry,
+                signal.stop_loss,
+                signal.atr,
+                signal.market,
                 symbol=signal.symbol
             )
 
             if size <= 0:
                 return
 
-            params = {}
+            lev = self.risk.dynamic_leverage(signal.atr, signal.entry)
 
-            if signal.market == "futures":
-
-                params = {
-                    "reduceOnly": False,
-                    "marginMode": settings.MARGIN_MODE
-                }
+            try:
+                self.exchange.set_leverage(signal.symbol, lev)
+            except:
+                pass
 
             order = self.exchange.create_market_order(
-                symbol=signal.symbol,
-                side=signal.side,
-                amount=size,
-                market=signal.market,
-                params=params
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market
             )
 
             if not order:
                 return
 
-            order_id = order.get("id", f"ord_{int(time.time())}")
-
-            trade_data = {
-                "order_id": order_id,
-                "side": signal.side,
+            trade = {
                 "entry": signal.entry,
                 "size": size,
+                "side": signal.side,
                 "stop_loss": signal.stop_loss,
                 "take_profit": signal.take_profit,
                 "atr": signal.atr
             }
 
-            self.risk.register_open(
-                signal.symbol,
-                trade_data,
-                signal.market
-            )
+            self.risk.register_open(signal.symbol, trade, signal.market)
 
-            self.notifier.trade_opened(
-                symbol=signal.symbol,
-                side=signal.side,
-                size=size,
-                entry=signal.entry,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                market=signal.market,
-                strategy=signal.strategy,
-                confidence=signal.confidence
-            )
+        finally:
 
-        except Exception as e:
-
-            logger.error(f"[TRADE] {signal.symbol} {e}")
+            self.risk.release_symbol(signal.symbol)
 
 
-# --------------------------------------------------
+# ==========================================================
 # POSITION MONITOR
-# --------------------------------------------------
+# ==========================================================
 
     def _monitor_positions(self):
 
-        try:
+        trades = self.risk.all_open_trades()
 
-            trades = self.risk.all_open_trades()
+        for trade in trades:
 
-            for trade in trades:
+            try:
 
-                symbol = trade["symbol"]
-                market = trade["market"]
-
-                ticker = self.exchange.fetch_ticker(symbol, market)
+                ticker = self.exchange.fetch_ticker(trade["symbol"], trade["market"])
 
                 price = float(ticker["last"])
 
@@ -388,85 +243,77 @@ class TradingBot:
                 if close:
 
                     self._close_position(
-                        symbol,
-                        market,
+                        trade["symbol"],
+                        trade["market"],
                         trade,
                         price,
                         reason
                     )
 
-        except Exception as e:
+            except Exception as e:
 
-            logger.error(f"[MONITOR] {e}")
+                logger.warning(f"[MONITOR] {trade['symbol']} {e}")
 
 
 # ==========================================================
-# CLOSE
+# CLOSE POSITION
 # ==========================================================
 
     def _close_position(self, symbol, market, trade, price, reason):
 
-        side = "sell" if trade["side"] == "buy" else "buy"
+        try:
 
-            order = self.exchange.create_market_order(
-                symbol=symbol,
-                side=side,
-                amount=trade["size"],
-                market=market,
-                params={"reduceOnly": True} if market == "futures" else {}
+            side = "sell" if trade["side"] == "buy" else "buy"
+
+            self.exchange.create_market_order(
+                symbol,
+                side,
+                trade["size"],
+                market,
+                {"reduceOnly": True}
             )
-
-            logger.error(f"[CLOSE ORDER] {symbol} {e}")
-            return
 
             entry = trade["entry"]
 
-            pnl_pct = ((exit_price - entry) / entry) * 100
+            direction = 1 if trade["side"] == "buy" else -1
 
-            if trade["side"] == "sell":
-                pnl_pct *= -1
+            pnl_usdt = (price - entry) * trade["size"] * direction
 
-            pnl_usdt = trade["size"] * entry * (pnl_pct / 100)
+            pnl_pct = ((price - entry) / entry) * 100 * direction
 
-        self.risk.register_close(symbol, pnl_pct, market, reason)
+            self.risk.register_close(symbol, pnl_pct, market, reason)
 
-        logger.info(f"CLOSE {symbol} {pnl_pct:.2f}%")
+            logger.info(f"CLOSE {symbol} {pnl_pct:.2f}%")
+
+        except Exception as e:
+
+            logger.error(f"[CLOSE] {symbol} {e}")
 
 
-# --------------------------------------------------
+# ==========================================================
 # SUPPORT
-# --------------------------------------------------
+# ==========================================================
 
     def _check_regime(self):
 
         try:
-            self._regime.evaluate(self)
+            self.regime.evaluate(self)
         except Exception as e:
             logger.error(f"[REGIME] {e}")
 
 
-    def _scan_breakout(self):
-        logger.debug("[SCAN] breakout")
-
-
-    def _scan_scalping(self):
-        logger.debug("[SCAN] scalping")
-
-
     def _scan_emerging(self):
+
         try:
-            coins = self._emerging.scan()
+
+            coins = self.emerging.scan()
+
             if coins:
                 logger.info(f"[EMERGING] {len(coins)} coins")
+
         except Exception as e:
+
             logger.error(f"[EMERGING] {e}")
-
-
-    def _auto_rebalance(self):
-        try:
-            self.exchange.auto_rebalance()
-        except:
-            pass
 
 
     def _sync_balance(self):
@@ -501,7 +348,7 @@ class TradingBot:
             logger.warning(e)
 
 
-# --------------------------------------------------
+# ==========================================================
 
 if __name__ == "__main__":
 
