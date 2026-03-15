@@ -37,6 +37,51 @@ from trading_bot.dashboard.server import app
 ENTRY_DELAY_SECONDS = 2
 TRADE_COOLDOWN = 1800
 
+# ==========================================================
+# LOGGER SETUP
+# ==========================================================
+
+def _setup_logger():
+
+    os.makedirs("logs", exist_ok=True)
+
+    logger.remove()
+
+    logger.add(
+        "logs/bot.log",
+        rotation="50 MB",
+        retention="14 days",
+        level=settings.LOG_LEVEL,
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {message}"
+    )
+
+    logger.add(
+        lambda msg: print(msg, end=""),
+        level=settings.LOG_LEVEL,
+        colorize=True,
+    )
+
+    def _dashboard_log(msg):
+
+        if _bot_ref is None:
+            return
+
+        _bot_ref._recent_logs.append({
+            "ts": msg.record["time"].isoformat(),
+            "level": msg.record["level"].name,
+            "msg": msg.record["message"]
+        })
+
+        _bot_ref._recent_logs = _bot_ref._recent_logs[-100:]
+
+    logger.add(_dashboard_log, level="DEBUG")
+
+
+try:
+    from trading_bot.dashboard.state_writer import write_state
+    DASHBOARD_ENABLED = True
+except:
+    DASHBOARD_ENABLED = False
 
 class TradingBot:
 
@@ -107,20 +152,25 @@ class TradingBot:
 
     def _start_dashboard(self):
 
-        try:
+        port = int(os.environ.get("PORT", settings.DASHBOARD_PORT))
 
-            thread = threading.Thread(
-                target=start_dashboard,
-                daemon=True
-            )
+        config = uvicorn.Config(
+            "trading_bot.dashboard.server:app",
+            host="0.0.0.0",
+            port=port,
+            log_level="warning"
+        )
 
-            thread.start()
+        server = uvicorn.Server(config)
 
-            logger.info("[DASHBOARD] avviata")
+        thread = threading.Thread(
+            target=server.run,
+            daemon=True
+        )
 
-        except Exception as e:
+        thread.start()
 
-            logger.warning(f"Dashboard error {e}")
+        logger.info(f"[DASHBOARD] running on port {port}")
 
 
 # ==========================================================
