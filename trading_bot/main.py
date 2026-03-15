@@ -15,6 +15,7 @@ from trading_bot.utils.exchange import BitgetExchange
 from trading_bot.utils.risk_manager import RiskManager
 from trading_bot.utils.notifier import TelegramNotifier
 from trading_bot.models.database import DB
+from trading_bot.dashboard.state_writer import write_state
 
 from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
@@ -154,6 +155,15 @@ class TradingBot:
 
             logger.warning(f"dashboard error {e}")
 
+    def _update_dashboard(self):
+
+    try:
+
+        write_state(self)
+
+    except Exception as e:
+
+        logger.warning(f"[DASHBOARD UPDATE] {e}")
 
 # ==========================================================
 # TELEGRAM
@@ -224,6 +234,7 @@ class TradingBot:
 
         schedule.every(1).hours.do(self._health_check)
 
+        schedule.every(5).seconds.do(self._update_dashboard)
 
 # ==========================================================
 # MARKET SCAN
