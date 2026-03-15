@@ -200,3 +200,57 @@ class RiskManager:
             "wins": self.wins,
             "losses": self.losses
         }
+
+# ==========================================================
+# DB RECOVERY
+# ==========================================================
+
+    def recover_from_db(self):
+
+        """
+        Recupera eventuali trade aperti dal database
+        quando il bot viene riavviato.
+        """
+
+        try:
+
+            from trading_bot.models.database import Trade, DB_AVAILABLE
+
+            if not DB_AVAILABLE:
+                return
+
+            from sqlalchemy.orm import Session
+            from sqlalchemy import create_engine
+            from trading_bot.config import settings
+
+            engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+
+            with Session(engine) as s:
+
+                trades = s.query(Trade).filter(Trade.status == "open").all()
+
+            for t in trades:
+
+                trade_data = {
+                    "order_id": t.order_id,
+                    "side": t.side,
+                    "entry": t.entry_price,
+                    "size": t.size,
+                    "stop_loss": t.stop_loss,
+                    "take_profit": t.take_profit,
+                    "atr": t.atr
+                }
+
+                if t.market == "spot":
+
+                    self.open_spot[t.symbol] = trade_data
+
+                else:
+
+                    self.open_futures[t.symbol] = trade_data
+
+            logger.info(f"[RISK] recovered {len(trades)} open trades")
+
+        except Exception as e:
+
+            logger.warning(f"[RISK] recovery error {e}")
