@@ -308,6 +308,8 @@ class TradingBot:
 # --------------------------------------------------
 
     def _scan_scalping(self):
+        
+        logger.info("[TEST] strategy executed")
 
         strategies = [s for s in self.strategies if s.NAME == "SCALPING"]
 
@@ -458,7 +460,7 @@ class TradingBot:
             )
 
             logger.info(f"[SIZE] {signal.symbol} size={size}")
-            
+
             if size <= 0:
                 return
 
