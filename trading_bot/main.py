@@ -530,12 +530,14 @@ class TradingBot:
                 logger.error(f"[TRADE] order failed {signal.symbol}")
                 return
 
+            filled = float(order.get("filled", size))
+            
             trade_data = {
 
                 "order_id": order.get("id"),
                 "side": signal.side,
                 "entry": signal.entry,
-                "size": size,
+                "size": filled,
                 "stop_loss": signal.stop_loss,
                 "take_profit": signal.take_profit,
                 "atr": signal.atr
@@ -614,7 +616,19 @@ class TradingBot:
 
             side = "sell" if trade["side"] == "buy" else "buy"
 
-            order = self.exchange.create_market_order(symbol, side, trade["size"], market)
+            base = symbol.split("/")[0]
+
+            balance = self.exchange.fetch_balance(market)
+            
+            asset_balance = float(balance.get(base, {}).get("free", 0))
+            
+            if asset_balance <= 0:
+                logger.error(f"[CLOSE] no balance for {symbol}")
+                return
+            
+            size = asset_balance * 0.999
+            
+            order = self.exchange.create_market_order(symbol, side, size, market)
 
             if not order:
                 logger.error(f"[CLOSE] order failed {symbol}")
