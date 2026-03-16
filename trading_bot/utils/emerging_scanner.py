@@ -48,6 +48,9 @@ class EmergingScanner:
 
     def __init__(self):
 
+        self._bitget_markets = None
+        self._bitget_markets_ts = 0
+
         self._last_scan = []
         self._last_scan_ts = 0
         self._scan_ttl = 180
@@ -55,6 +58,33 @@ class EmergingScanner:
         self._vol_percentiles = {}
         self._vol_percentiles_ts = 0
 
+    def _get_bitget_markets(self):
+
+        now = time.time()
+
+        if self._bitget_markets and (now - self._bitget_markets_ts) < 3600:
+            return self._bitget_markets
+
+        try:
+
+            import ccxt
+
+            exchange = ccxt.bitget()
+
+            markets = exchange.load_markets()
+
+            self._bitget_markets = markets
+            self._bitget_markets_ts = now
+
+            logger.info(f"[EMERGING] cached {len(markets)} bitget markets")
+
+            return markets
+
+        except Exception as e:
+
+            logger.warning(f"[EMERGING] markets load error {e}")
+
+            return {}
 
 # ==========================================================
 # MAIN SCAN
@@ -67,9 +97,9 @@ class EmergingScanner:
         if not force and (now - self._last_scan_ts) < self._scan_ttl:
             return self._last_scan
 
-        min_vol = _cfg("EM_MIN_VOLUME_USD", 500_000)
-        min_chg = _cfg("EM_MIN_CHANGE_24H", 1)
-        min_surge = _cfg("EM_MIN_VOLUME_SURGE", 1.05)
+        min_vol = _cfg("EM_MIN_VOLUME_USD", 2_000_000)
+        min_chg = _cfg("EM_MIN_CHANGE_24H", 3)
+        min_surge = _cfg("EM_MIN_VOLUME_SURGE", 1.1)
         max_results = _cfg("EM_MAX_RESULTS", 20)
 
         logger.info(
@@ -134,15 +164,29 @@ class EmergingScanner:
 
         # 🔧 FILTRO MERCATI TRADABILI SU BITGET
         try:
-            import ccxt
-            exchange = ccxt.bitget()
-            markets = exchange.load_markets()
+            markets = self._get_bitget_markets()
 
             tradable = []
+
             for c in results:
-                pair = f"{c['symbol']}/USDT"
+
+                sym = c["symbol"].upper()
+
+                pair = f"{sym}/USDT"
+
                 if pair in markets:
+
                     tradable.append(c)
+
+                else:
+
+                    # fallback: ricerca simbolo parziale
+                    for m in markets:
+
+                        if m.endswith("/USDT") and m.startswith(sym):
+
+                            tradable.append(c)
+                            break
 
             results = tradable
 
@@ -390,7 +434,7 @@ class EmergingScanner:
 
     def _norm_cg(self, coin, source):
 
-        sym = coin.get("symbol","").upper()
+        sym = coin.get("symbol","").upper().replace("-","")
 
         vol = float(coin.get("total_volume") or 0)
 
