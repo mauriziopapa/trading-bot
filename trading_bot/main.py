@@ -540,6 +540,16 @@ class TradingBot:
                 logger.warning(f"[TRADE] too small {signal.symbol}")
                 return
 
+            # SPOT cannot short
+            if market == "spot" and side == "sell":
+
+                bal = self.exchange.fetch_balance("spot")
+                base = symbol.split("/")[0]
+
+                if float(bal.get(base, {}).get("free", 0)) <= 0:
+                    logger.warning(f"[TRADE] skip sell {symbol} no asset")
+                    return
+                    
             order = self.exchange.create_market_order(
                 signal.symbol,
                 signal.side,

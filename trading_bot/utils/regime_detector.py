@@ -142,10 +142,14 @@ class RegimeDetector:
         # ---------- risk stats robust ----------
         try:
 
-            stats_fn = getattr(bot.risk, "stats", None)
+            stats_obj = getattr(bot.risk, "stats", None)
 
-            if callable(stats_fn):
-                stats = stats_fn()
+            if callable(stats_obj):
+                stats = stats_obj()
+
+            elif isinstance(stats_obj, dict):
+                stats = stats_obj
+
             else:
                 stats = {}
 
