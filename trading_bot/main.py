@@ -428,11 +428,11 @@ class TradingBot:
 
                 symbol = f"{coin['symbol'].upper()}/USDT:USDT"
 
-                if symbol not in settings.SPOT_SYMBOLS:
-
-                    logger.info(f"[EMERGING] skip {symbol} not in whitelist")
-
-                    continue
+#                if symbol not in settings.SPOT_SYMBOLS:
+#
+#                   logger.info(f"[EMERGING] skip {symbol} not in whitelist")
+#
+#                continue
 
                 ohlcv = self.exchange.fetch_ohlcv(
                     symbol,
