@@ -304,7 +304,7 @@ class BitgetExchange:
 
                 raise
 
-       if last:
+        if last:
             raise last
 
         raise Exception("retry failed")
