@@ -485,107 +485,107 @@ class TradingBot:
 # EXECUTE TRADE
 # --------------------------------------------------
 
-def _execute_signal(self, signal):
+    def _execute_signal(self, signal):
 
-    try:
+        try:
 
-        balance = self.exchange.get_usdt_balance(signal.market) or 0
+            balance = self.exchange.get_usdt_balance(signal.market) or 0
 
-        if balance < 5:
-            logger.warning("[TRADE] balance too low")
-            return
+            if balance < 5:
+                logger.warning("[TRADE] balance too low")
+                return
 
-        balance_safe = balance * 0.92
+            balance_safe = balance * 0.92
 
-        size = self.risk.position_size(
-            balance_safe,
-            signal.entry,
-            signal.stop_loss,
-            signal.atr,
-            signal.market,
-            symbol=signal.symbol
-        )
+            size = self.risk.position_size(
+                balance_safe,
+                signal.entry,
+                signal.stop_loss,
+                signal.atr,
+                signal.market,
+                symbol=signal.symbol
+            )
 
-        if size <= 0:
-            return
+            if size <= 0:
+                return
 
-        trade_value = size * signal.entry
-
-        if trade_value > balance_safe:
-            size = balance_safe / signal.entry
             trade_value = size * signal.entry
 
-        if trade_value < 5:
-            logger.warning(f"[TRADE] too small {signal.symbol}")
-            return
+            if trade_value > balance_safe:
+                size = balance_safe / signal.entry
+                trade_value = size * signal.entry
 
-        order = self.exchange.create_market_order(
-            signal.symbol,
-            signal.side,
-            size,
-            signal.market
-        )
+            if trade_value < 5:
+                logger.warning(f"[TRADE] too small {signal.symbol}")
+                return
 
-        if not order or not order.get("id"):
-            logger.error(f"[TRADE] order failed {signal.symbol}")
-            return
+            order = self.exchange.create_market_order(
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market
+            )
 
-        filled = float(order.get("filled", size))
+            if not order or not order.get("id"):
+                logger.error(f"[TRADE] order failed {signal.symbol}")
+                return
 
-        trade_data = {
-            "order_id": order.get("id"),
-            "side": signal.side,
-            "entry": signal.entry,
-            "size": filled,
-            "stop_loss": signal.stop_loss,
-            "take_profit": signal.take_profit,
-            "atr": signal.atr
-        }
+            filled = float(order.get("filled", size))
 
-        # register in memory
-        self.risk.register_open(
-            signal.symbol,
-            trade_data,
-            signal.market
-        )
-
-        # save to DB
-        try:
-            self.db.insert_trade({
-                "symbol": signal.symbol,
-                "market": signal.market,
+            trade_data = {
+                "order_id": order.get("id"),
                 "side": signal.side,
                 "entry": signal.entry,
                 "size": filled,
                 "stop_loss": signal.stop_loss,
                 "take_profit": signal.take_profit,
-                "order_id": order.get("id"),
-                "status": "open",
-                "created_at": int(time.time())
-            })
+                "atr": signal.atr
+            }
+
+            # register in memory
+            self.risk.register_open(
+                signal.symbol,
+                trade_data,
+                signal.market
+            )
+
+            # save to DB
+            try:
+                self.db.insert_trade({
+                    "symbol": signal.symbol,
+                    "market": signal.market,
+                    "side": signal.side,
+                    "entry": signal.entry,
+                    "size": filled,
+                    "stop_loss": signal.stop_loss,
+                    "take_profit": signal.take_profit,
+                    "order_id": order.get("id"),
+                    "status": "open",
+                    "created_at": int(time.time())
+                })
+            except Exception as e:
+                logger.error(f"[DB] save trade failed {e}")
+
+            # notifier
+            self.notifier.trade_opened(
+                symbol=signal.symbol,
+                side=signal.side,
+                size=filled,
+                entry=signal.entry,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                market=signal.market,
+                strategy=signal.strategy,
+                confidence=signal.confidence
+            )
+
+            logger.info(
+                f"[TRADE] OPEN {signal.symbol} "
+                f"value={trade_value:.2f}"
+            )
+
         except Exception as e:
-            logger.error(f"[DB] save trade failed {e}")
-
-        # notifier
-        self.notifier.trade_opened(
-            symbol=signal.symbol,
-            side=signal.side,
-            size=filled,
-            entry=signal.entry,
-            stop_loss=signal.stop_loss,
-            take_profit=signal.take_profit,
-            market=signal.market,
-            strategy=signal.strategy,
-            confidence=signal.confidence
-        )
-
-        logger.info(
-            f"[TRADE] OPEN {signal.symbol} "
-            f"value={trade_value:.2f}"
-        )
-
-    except Exception as e:
-        logger.error(f"[TRADE] {signal.symbol} {e}")
+            logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
@@ -620,8 +620,6 @@ def _execute_signal(self, signal):
 
             except Exception as e:
                 logger.error(f"[MONITOR] {e}")
-
-
 # --------------------------------------------------
 # CLOSE POSITION
 # --------------------------------------------------
