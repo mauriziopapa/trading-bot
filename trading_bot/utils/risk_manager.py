@@ -1,6 +1,7 @@
 """
-Risk Manager v7
+Risk Manager v7.3
 Improved execution stability
+Compatible with regime_detector
 """
 
 import time
@@ -26,6 +27,13 @@ class RiskManager:
 
         self.wins = 0
         self.losses = 0
+
+        # storico pnl per regime detector
+        self._recent_pnls = []
+        self._recent_limit = 100
+
+        # db reference (iniettata dal main)
+        self.db = None
 
 
 # ==========================================================
@@ -65,8 +73,8 @@ class RiskManager:
             # quantità asset
             size = risk_amount / risk_per_unit
 
-            # limite esposizione (max 35% capitale)
-            max_notional = balance * 0.35
+            # limite esposizione
+            max_notional = balance * (settings.MAX_NOTIONAL_PCT / 100)
 
             if size * entry > max_notional:
                 size = max_notional / entry
@@ -84,20 +92,16 @@ class RiskManager:
             logger.error(f"[RISK] position_size error {e}")
             return 0
 
+
 # ==========================================================
 # RECOVER OPEN TRADES FROM DB
 # ==========================================================
 
     def recover_from_db(self):
 
-        """
-        Ripristina eventuali trade aperti dal database
-        quando il bot viene riavviato.
-        """
-
         try:
 
-            if not hasattr(self, "db"):
+            if not self.db:
                 logger.info("[RISK] DB non collegato — skip recovery")
                 return
 
@@ -133,6 +137,7 @@ class RiskManager:
 
             logger.error(f"[RISK] recover_from_db error {e}")
 
+
 # ==========================================================
 # LEVERAGE
 # ==========================================================
@@ -140,7 +145,7 @@ class RiskManager:
     def dynamic_leverage(self, atr, entry):
 
         if atr <= 0 or entry <= 0:
-            return 5
+            return settings.DEFAULT_LEVERAGE
 
         vol = atr / entry
 
@@ -193,15 +198,27 @@ class RiskManager:
 
     def register_close(self, symbol, pnl_pct, market, reason):
 
-        if pnl_pct > 0:
-            self.wins += 1
-        else:
-            self.losses += 1
+        try:
 
-        if market == "spot":
-            self.open_spot.pop(symbol, None)
-        else:
-            self.open_futures.pop(symbol, None)
+            if pnl_pct > 0:
+                self.wins += 1
+            else:
+                self.losses += 1
+
+            # salva pnl nello storico
+            self._recent_pnls.append(pnl_pct)
+
+            if len(self._recent_pnls) > self._recent_limit:
+                self._recent_pnls.pop(0)
+
+            if market == "spot":
+                self.open_spot.pop(symbol, None)
+            else:
+                self.open_futures.pop(symbol, None)
+
+        except Exception as e:
+
+            logger.error(f"[RISK] register_close error {e}")
 
 
 # ==========================================================
@@ -213,17 +230,27 @@ class RiskManager:
         trades = []
 
         for sym, t in self.open_spot.items():
-            t["symbol"] = sym
-            t["market"] = "spot"
-            trades.append(t)
+
+            trade = t.copy()
+            trade["symbol"] = sym
+            trade["market"] = "spot"
+
+            trades.append(trade)
 
         for sym, t in self.open_futures.items():
-            t["symbol"] = sym
-            t["market"] = "futures"
-            trades.append(t)
+
+            trade = t.copy()
+            trade["symbol"] = sym
+            trade["market"] = "futures"
+
+            trades.append(trade)
 
         return trades
 
+
+# ==========================================================
+# STATS
+# ==========================================================
 
     def stats(self):
 
@@ -232,3 +259,42 @@ class RiskManager:
             "wins": self.wins,
             "losses": self.losses
         }
+
+
+# ==========================================================
+# RECENT PERFORMANCE (REGIME DETECTOR)
+# ==========================================================
+
+    def recent_stats(self):
+
+        try:
+
+            if not self._recent_pnls:
+
+                return {
+                    "avg_pnl": 0,
+                    "win_rate": 0,
+                    "trades": 0
+                }
+
+            trades = len(self._recent_pnls)
+
+            wins = len([p for p in self._recent_pnls if p > 0])
+
+            avg = sum(self._recent_pnls) / trades
+
+            return {
+                "avg_pnl": avg,
+                "win_rate": wins / trades,
+                "trades": trades
+            }
+
+        except Exception as e:
+
+            logger.error(f"[RISK] recent_stats error {e}")
+
+            return {
+                "avg_pnl": 0,
+                "win_rate": 0,
+                "trades": 0
+            }
