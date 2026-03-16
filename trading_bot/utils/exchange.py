@@ -181,7 +181,7 @@ class BitgetExchange:
 
         try:
 
-            amount = client.amount_to_precision(symbol, amount)
+            amount = float(client.amount_to_precision(symbol, amount))
 
             min_size = float(info["limits"]["amount"]["min"] or 0)
 
