@@ -118,17 +118,16 @@ class BitgetExchange:
     def fetch_ohlcv(self, symbol, timeframe, limit=300, market="spot"):
 
         client = self.spot if market == "spot" else self.futures
-        markets = self._spot_markets if market == "spot" else self._futures_markets
 
-        # 🔧 FIX: controllo simbolo valido
-        if symbol not in markets:
+        # normalize futures symbol
+        if market == "futures" and ":" not in symbol:
+            symbol = f"{symbol}:USDT"
+
+        if symbol not in client.markets:
             logger.info(f"[OHLCV] symbol not supported {symbol}")
-            return None
+            return []
 
         raw = self._retry(client.fetch_ohlcv, symbol, timeframe, limit=limit)
-
-        if not raw:
-            return None
 
         return [
             {

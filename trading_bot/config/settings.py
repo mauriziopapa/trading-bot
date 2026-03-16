@@ -290,7 +290,7 @@ class DynamicSettings:
         return [s.strip() for s in os.getenv("MARKET_TYPES", "futures").split(",") if s.strip()]
     @property
     def SPOT_SYMBOLS(self) -> list:
-        raw = os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").strip()
+        raw = os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,DOT/USDT,FET/USDT,FET/USDT").strip()
         if raw.upper() == "AUTO":
             try:
                 from trading_bot.utils.symbol_discovery import get_discovery
@@ -300,7 +300,7 @@ class DynamicSettings:
         return [s.strip() for s in raw.split(",") if s.strip()]
     @property
     def FUTURES_SYMBOLS(self) -> list:
-        raw = os.getenv("FUTURES_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT").strip()
+        raw = os.getenv("FUTURES_SYMBOLS", "BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT,BNB/USDT:USDT,XRP/USDT:USDT,ADA/USDT:USDT,AVAX/USDT:USDT,LINK/USDT:USDT,DOT/USDT:USDT,MATIC/USDT:USDT,DOGE/USDT:USDT,LTC/USDT:USDT,ATOM/USDT:USDT,NEAR/USDT:USDT,APT/USDT:USDT,OP/USDT:USDT,ARB/USDT:USDT,INJ/USDT:USDT,RUNE/USDT:USDT,SUI/USDT:USDT,SEI/USDT:USDT,PEPE/USDT:USDT,WIF/USDT:USDT,BONK/USDT:USDT,FET/USDT:USDT,TAO/USDT:USDT,ENS/USDT:USDT,FIL/USDT:USDT,ICP/USDT:USDT,ETC/USDT:USDT,AAVE/USDT:USDT,UNI/USDT:USDT,HBAR/USDT:USDT,THETA/USDT:USDT,ALGO/USDT:USDT,VET/USDT:USDT,GRT/USDT:USDT,IMX/USDT:USDT,STX/USDT:USDT,KAS/USDT:USDT,AR/USDT:USDT,ORDI/USDT:USDT").strip()
         if raw.upper() == "AUTO":
             try:
                 from trading_bot.utils.symbol_discovery import get_discovery
