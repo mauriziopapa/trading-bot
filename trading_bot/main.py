@@ -230,6 +230,49 @@ class TradingBot:
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
 
+def _scan_scalping(self):
+
+    logger.info("[SCALPING] scan")
+
+    strategies = [s for s in self.strategies if getattr(s, "NAME", "") == "SCALPING"]
+
+    if not strategies:
+        return
+
+    symbols = settings.SPOT_SYMBOLS[:15]
+
+    for symbol in symbols:
+
+        try:
+
+            ohlcv = self.exchange.fetch_ohlcv(
+                symbol,
+                settings.TF_SCALP,
+                120,
+                "spot"
+            )
+
+            if not ohlcv or len(ohlcv) < 50:
+                continue
+
+            df = ohlcv_to_df(ohlcv)
+
+            for strat in strategies:
+
+                signal = strat.analyze(df, symbol, "spot")
+
+                if not signal:
+                    continue
+
+                logger.info(f"[SCALPING SIGNAL] {symbol}")
+
+                self._track_signal(signal)
+
+                self._process_signal(signal)
+
+        except Exception as e:
+
+            logger.error(f"[SCALPING] {symbol} {e}")
 
 # --------------------------------------------------
 # BALANCE
@@ -301,64 +344,6 @@ class TradingBot:
 
             except Exception as e:
                 logger.debug(f"[SWING] {symbol} {e}")
-
-
-# --------------------------------------------------
-# SCALPING
-# --------------------------------------------------
-
-def _scan_scalping(self):
-
-    logger.info("[SCALPING] scan avviato")
-
-    strategies = [s for s in self.strategies if getattr(s, "NAME", "") == "SCALPING"]
-
-    if not strategies:
-        logger.debug("[SCALPING] nessuna strategia attiva")
-        return
-
-    symbols = settings.SPOT_SYMBOLS[:15]
-
-    logger.debug(f"[SCALPING] symbols={len(symbols)} strategies={len(strategies)}")
-
-    for symbol in symbols:
-
-        try:
-
-            ohlcv = self.exchange.fetch_ohlcv(
-                symbol,
-                settings.TF_SCALP,
-                120,
-                "spot"
-            )
-
-            if not ohlcv or len(ohlcv) < 50:
-                logger.debug(f"[SCALPING] dati insufficienti {symbol}")
-                continue
-
-            df = ohlcv_to_df(ohlcv)
-
-            for strat in strategies:
-
-                try:
-
-                    signal = strat.analyze(df, symbol, "spot")
-
-                    if not signal:
-                        continue
-
-                    logger.info(f"[SCALPING SIGNAL] {symbol} {signal.side}")
-
-                    self._track_signal(signal)
-                    self._process_signal(signal)
-
-                except Exception as e:
-
-                    logger.error(f"[SCALPING] strategy error {symbol} {e}")
-
-        except Exception as e:
-
-            logger.error(f"[SCALPING] data error {symbol} {e}")
 
 
 # --------------------------------------------------
