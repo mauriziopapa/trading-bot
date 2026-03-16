@@ -550,6 +550,22 @@ class TradingBot:
                 signal.market
             )
 
+        try:
+            self.db.insert_trade({
+                "symbol": signal.symbol,
+                "market": signal.market,
+                "side": signal.side,
+                "entry": signal.entry,
+                "size": size,
+                "stop_loss": signal.stop_loss,
+                "take_profit": signal.take_profit,
+                "order_id": order.get("id"),
+                "status": "open",
+                "created_at": int(time.time())
+            })
+        except Exception as e:
+                logger.error(f"[DB] save trade failed {e}")
+
             self.notifier.trade_opened(
                 symbol=signal.symbol,
                 side=signal.side,
