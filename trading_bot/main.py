@@ -263,6 +263,11 @@ class TradingBot:
 
     def _scan_scalping(self):
 
+        now = datetime.now(timezone.utc)
+
+        if now.second > 3:
+            return
+
         logger.info("[SCALPING] scan")
 
         strategies = [s for s in self.strategies if getattr(s, "NAME", "") == "SCALPING"]
