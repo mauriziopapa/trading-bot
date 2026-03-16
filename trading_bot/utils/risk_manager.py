@@ -1,12 +1,11 @@
 """
-Risk Manager v7.3
-Improved execution stability
+Risk Manager v7.4
+Stable production version
 Compatible with regime_detector
 """
 
 import time
 import threading
-
 from loguru import logger
 from trading_bot.config import settings
 
@@ -24,16 +23,39 @@ class RiskManager:
 
         self.session_start_balance = 0
         self.peak_balance = 0
+        self._estimated_balance = 0
 
         self.wins = 0
         self.losses = 0
 
-        # storico pnl per regime detector
         self._recent_pnls = []
         self._recent_limit = 100
 
-        # db reference (iniettata dal main)
         self.db = None
+
+
+# ==========================================================
+# BALANCE ACCESS (FIX regime detector)
+# ==========================================================
+
+    @property
+    def estimated_balance(self):
+
+        if self._estimated_balance > 0:
+            return self._estimated_balance
+
+        return self.session_start_balance
+
+
+    def update_balance(self, balance):
+
+        self._estimated_balance = balance
+
+        if self.session_start_balance == 0:
+            self.session_start_balance = balance
+
+        if balance > self.peak_balance:
+            self.peak_balance = balance
 
 
 # ==========================================================
@@ -42,15 +64,23 @@ class RiskManager:
 
     def drawdown_exceeded(self, balance):
 
-        if self.peak_balance == 0:
-            self.peak_balance = balance
+        try:
 
-        if balance > self.peak_balance:
-            self.peak_balance = balance
+            if self.peak_balance <= 0:
+                self.peak_balance = balance
+                return False
 
-        dd = ((self.peak_balance - balance) / self.peak_balance) * 100
+            if balance > self.peak_balance:
+                self.peak_balance = balance
 
-        return dd > settings.MAX_DRAWDOWN_PCT
+            dd = ((self.peak_balance - balance) / self.peak_balance) * 100
+
+            return dd > settings.MAX_DRAWDOWN_PCT
+
+        except Exception as e:
+
+            logger.error(f"[RISK] drawdown error {e}")
+            return False
 
 
 # ==========================================================
@@ -61,8 +91,10 @@ class RiskManager:
 
         try:
 
-            risk_pct = settings.MAX_RISK_PCT / 100
+            if entry <= 0:
+                return 0
 
+            risk_pct = settings.MAX_RISK_PCT / 100
             risk_amount = balance * risk_pct
 
             risk_per_unit = abs(entry - stop_loss)
@@ -70,16 +102,13 @@ class RiskManager:
             if risk_per_unit <= 0:
                 return 0
 
-            # quantità asset
             size = risk_amount / risk_per_unit
 
-            # limite esposizione
             max_notional = balance * (settings.MAX_NOTIONAL_PCT / 100)
 
             if size * entry > max_notional:
                 size = max_notional / entry
 
-            # minimo trade
             min_notional = 5
 
             if size * entry < min_notional:
@@ -94,7 +123,7 @@ class RiskManager:
 
 
 # ==========================================================
-# RECOVER OPEN TRADES FROM DB
+# RECOVER OPEN TRADES
 # ==========================================================
 
     def recover_from_db(self):
@@ -102,12 +131,14 @@ class RiskManager:
         try:
 
             if not self.db:
+
                 logger.info("[RISK] DB non collegato — skip recovery")
                 return
 
             trades = self.db.get_open_trades()
 
             if not trades:
+
                 logger.info("[RISK] recovered 0 open trades")
                 return
 
@@ -117,6 +148,7 @@ class RiskManager:
                 market = t.get("market", "spot")
 
                 trade_data = {
+
                     "order_id": t.get("order_id"),
                     "side": t.get("side"),
                     "entry": float(t.get("entry")),
@@ -144,21 +176,27 @@ class RiskManager:
 
     def dynamic_leverage(self, atr, entry):
 
-        if atr <= 0 or entry <= 0:
+        try:
+
+            if atr <= 0 or entry <= 0:
+                return settings.DEFAULT_LEVERAGE
+
+            vol = atr / entry
+
+            if vol < 0.01:
+                return 15
+
+            if vol < 0.02:
+                return 10
+
+            if vol < 0.04:
+                return 7
+
+            return 5
+
+        except Exception:
+
             return settings.DEFAULT_LEVERAGE
-
-        vol = atr / entry
-
-        if vol < 0.01:
-            return 15
-
-        if vol < 0.02:
-            return 10
-
-        if vol < 0.04:
-            return 7
-
-        return 5
 
 
 # ==========================================================
@@ -180,8 +218,7 @@ class RiskManager:
 
         with self._lock:
 
-            if symbol in self._pending_symbols:
-                self._pending_symbols.remove(symbol)
+            self._pending_symbols.discard(symbol)
 
 
 # ==========================================================
@@ -190,10 +227,16 @@ class RiskManager:
 
     def register_open(self, symbol, trade, market):
 
-        if market == "spot":
-            self.open_spot[symbol] = trade
-        else:
-            self.open_futures[symbol] = trade
+        try:
+
+            if market == "spot":
+                self.open_spot[symbol] = trade
+            else:
+                self.open_futures[symbol] = trade
+
+        except Exception as e:
+
+            logger.error(f"[RISK] register_open error {e}")
 
 
     def register_close(self, symbol, pnl_pct, market, reason):
@@ -205,7 +248,6 @@ class RiskManager:
             else:
                 self.losses += 1
 
-            # salva pnl nello storico
             self._recent_pnls.append(pnl_pct)
 
             if len(self._recent_pnls) > self._recent_limit:
@@ -246,10 +288,11 @@ class RiskManager:
             trades.append(trade)
 
         return trades
-# ==========================================================
-# OPEN SHOULD CLOSE
-# ==========================================================
 
+
+# ==========================================================
+# CLOSE CONDITIONS
+# ==========================================================
 
     def should_close(self, trade, price):
 
@@ -260,7 +303,6 @@ class RiskManager:
             tp = float(trade["take_profit"])
             side = trade["side"]
 
-            # LONG
             if side == "buy":
 
                 if price <= stop:
@@ -269,7 +311,6 @@ class RiskManager:
                 if price >= tp:
                     return True, "take_profit"
 
-            # SHORT
             else:
 
                 if price >= stop:
@@ -280,8 +321,11 @@ class RiskManager:
 
             return False, None
 
-        except Exception:
+        except Exception as e:
+
+            logger.error(f"[RISK] should_close error {e}")
             return False, None
+
 
 # ==========================================================
 # STATS
@@ -290,6 +334,7 @@ class RiskManager:
     def stats(self):
 
         return {
+
             "open_trades": len(self.open_spot) + len(self.open_futures),
             "wins": self.wins,
             "losses": self.losses
@@ -297,7 +342,7 @@ class RiskManager:
 
 
 # ==========================================================
-# RECENT PERFORMANCE (REGIME DETECTOR)
+# RECENT PERFORMANCE
 # ==========================================================
 
     def recent_stats(self):
@@ -319,6 +364,7 @@ class RiskManager:
             avg = sum(self._recent_pnls) / trades
 
             return {
+
                 "avg_pnl": avg,
                 "win_rate": wins / trades,
                 "trades": trades
@@ -329,6 +375,7 @@ class RiskManager:
             logger.error(f"[RISK] recent_stats error {e}")
 
             return {
+
                 "avg_pnl": 0,
                 "win_rate": 0,
                 "trades": 0
