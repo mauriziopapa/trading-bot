@@ -63,6 +63,7 @@ class BitgetExchange:
         if "spot" in settings.MARKET_TYPES:
             self._spot_markets = self._retry(self.spot.load_markets)
             logger.info(f"Spot: {len(self._spot_markets)} mercati")
+            logger.info(f"Example markets: {list(self._spot_markets.keys())[:10]}")
 
         if "futures" in settings.MARKET_TYPES:
             self._futures_markets = self._retry(self.futures.load_markets)
@@ -104,6 +105,11 @@ class BitgetExchange:
 
         logger.info(f"[EXCHANGE] Leva {lev}x su {count} futures")
 
+    def is_valid_symbol(self, symbol, market="spot"):
+
+        markets = self._spot_markets if market == "spot" else self._futures_markets
+
+        return symbol in markets
 
 # ==========================================================
 # MARKET DATA
@@ -112,18 +118,38 @@ class BitgetExchange:
     def fetch_ohlcv(self, symbol, timeframe, limit=300, market="spot"):
 
         client = self.spot if market == "spot" else self.futures
+        markets = self._spot_markets if market == "spot" else self._futures_markets
+
+        # 🔧 FIX: controllo simbolo valido
+        if symbol not in markets:
+            logger.debug(f"[OHLCV] symbol not supported {symbol}")
+            return None
 
         raw = self._retry(client.fetch_ohlcv, symbol, timeframe, limit=limit)
 
+        if not raw:
+            return None
+
         return [
-            {"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
+            {
+                "ts": r[0],
+                "open": r[1],
+                "high": r[2],
+                "low": r[3],
+                "close": r[4],
+                "volume": r[5],
+            }
             for r in raw
         ]
-
 
     def fetch_ticker(self, symbol, market="spot"):
 
         client = self.spot if market == "spot" else self.futures
+        markets = self._spot_markets if market == "spot" else self._futures_markets
+
+        if symbol not in markets:
+            logger.debug(f"[TICKER] symbol not supported {symbol}")
+            return None
 
         t = self._retry(client.fetch_ticker, symbol)
 
@@ -151,7 +177,13 @@ class BitgetExchange:
 
         balance = self.fetch_balance(market)
 
-        return float(balance.get("USDT", {}).get("free", 0))
+        if not balance:
+            return 0
+
+        try:
+            return float(balance["free"].get("USDT", 0))
+        except Exception:
+            return 0
 
 
 # ==========================================================
@@ -183,7 +215,10 @@ class BitgetExchange:
 
             amount = float(client.amount_to_precision(symbol, amount))
 
-            min_size = float(info["limits"]["amount"]["min"] or 0)
+            limits = info.get("limits", {})
+            amount_limits = limits.get("amount", {})
+
+            min_size = float(amount_limits.get("min") or 0)
 
             if float(amount) < min_size:
 
@@ -269,4 +304,7 @@ class BitgetExchange:
 
                 raise
 
-        raise last or Exception("retry failed")
+       if last:
+            raise last
+
+        raise Exception("retry failed")
