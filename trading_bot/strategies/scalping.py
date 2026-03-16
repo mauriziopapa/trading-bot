@@ -48,7 +48,7 @@ class ScalpingStrategy(BaseStrategy):
             return None
 
         base_symbol = symbol.split(":")[0]
-        if base_symbol not in settings.SCALPING_SYMBOLS:
+        if len(base_symbol) < 2:
             return None
 
         close  = df["close"]

@@ -132,6 +132,23 @@ class EmergingScanner:
 
         results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
+        # 🔧 FILTRO MERCATI TRADABILI SU BITGET
+        try:
+            import ccxt
+            exchange = ccxt.bitget()
+            markets = exchange.load_markets()
+
+            tradable = []
+            for c in results:
+                pair = f"{c['symbol']}/USDT"
+                if pair in markets:
+                    tradable.append(c)
+
+            results = tradable
+
+        except Exception as e:
+            logger.warning(f"Market filter error: {e}")
+
         self._last_scan = results[:max_results]
         self._last_scan_ts = now
 

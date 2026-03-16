@@ -283,7 +283,7 @@ class TradingBot:
 
         now = datetime.now(timezone.utc)
 
-        if now.second > 3:
+        if now.second > 10:
             return
 
         logger.info("[SCALPING] scan")
@@ -295,7 +295,21 @@ class TradingBot:
 
         coins = self._emerging.scan() or []
 
-        symbols = [f"{c['symbol']}/USDT" for c in coins[:10] if "symbol" in c]
+        symbols = []
+
+        for c in coins[:30]:
+
+            if "symbol" not in c:
+                continue
+
+            symbol = f"{c['symbol'].upper()}/USDT"
+
+            if symbol in settings.SPOT_SYMBOLS:
+                symbols.append(symbol)
+
+        # fallback
+        if not symbols:
+            symbols = settings.SPOT_SYMBOLS[:10]
 
         if not symbols:
             symbols = settings.SPOT_SYMBOLS[:10]
@@ -335,8 +349,7 @@ class TradingBot:
 
             except Exception as e:
 
-                logger.error(f"[SCALPING] {symbol} {e}")
-
+                logger.debug(f"[SCALPING] skip {symbol} {e}")
 
 # --------------------------------------------------
 # SWING SCAN
@@ -407,7 +420,7 @@ class TradingBot:
 
             coins = sorted(coins, key=lambda x: x.get("score", 0), reverse=True)
 
-            top = coins[:5]
+            top = coins[:10]
 
             logger.info(f"[EMERGING] top {[c['symbol'] for c in top]}")
 
@@ -416,6 +429,9 @@ class TradingBot:
                 symbol = f"{coin['symbol'].upper()}/USDT"
 
                 if symbol not in settings.SPOT_SYMBOLS:
+
+                    logger.debug(f"[EMERGING] skip {symbol} not in whitelist")
+
                     continue
 
                 ohlcv = self.exchange.fetch_ohlcv(
@@ -433,6 +449,11 @@ class TradingBot:
                 for strat in self.strategies:
 
                     signal = strat.analyze(df, symbol, "spot")
+
+                    logger.debug(
+                        f"[CHECK] {symbol} {strat.NAME} "
+                        f"{'SIGNAL' if signal else 'NO'}"
+                    )
 
                     if signal:
 
