@@ -472,76 +472,117 @@ class TradingBot:
 # EXECUTE TRADE
 # --------------------------------------------------
 
-    def _execute_signal(self, signal):
+def _execute_signal(self, signal):
 
-        try:
+    try:
 
-            balance = self.exchange.get_usdt_balance(signal.market) or 0
+        balance = self.exchange.get_usdt_balance(signal.market) or 0
 
-            if balance < 5:
-                logger.warning("[TRADE] balance too low")
-                return
+        if balance < 5:
+            logger.warning("[TRADE] balance too low")
+            return
 
-            size = self.risk.position_size(
-                balance,
-                signal.entry,
-                signal.stop_loss,
-                signal.atr,
-                signal.market,
-                symbol=signal.symbol
+        # --------------------------------------------------
+        # SAFETY BUFFER (fee + slippage)
+        # --------------------------------------------------
+
+        balance_safe = balance * 0.92
+
+        # --------------------------------------------------
+        # POSITION SIZE
+        # --------------------------------------------------
+
+        size = self.risk.position_size(
+            balance_safe,
+            signal.entry,
+            signal.stop_loss,
+            signal.atr,
+            signal.market,
+            symbol=signal.symbol
+        )
+
+        if size <= 0:
+            logger.warning("[TRADE] size=0")
+            return
+
+        # --------------------------------------------------
+        # CAPITAL CHECK
+        # --------------------------------------------------
+
+        trade_value = size * signal.entry
+
+        if trade_value > balance_safe:
+
+            logger.warning(
+                f"[TRADE] resize {signal.symbol} "
+                f"value={trade_value:.2f} balance={balance_safe:.2f}"
             )
 
-            if size <= 0:
-                logger.warning("[TRADE] size=0")
-                return
+            size = balance_safe / signal.entry
+            trade_value = size * signal.entry
 
-            order = self.exchange.create_market_order(
-                signal.symbol,
-                signal.side,
-                size,
-                signal.market
-            )
+        # --------------------------------------------------
+        # MIN ORDER CHECK
+        # --------------------------------------------------
 
-            if not order or not order.get("id"):
+        if trade_value < 5:
+            logger.warning(f"[TRADE] too small {signal.symbol}")
+            return
 
-                logger.error(f"[TRADE] order failed {signal.symbol}")
-                return
+        # --------------------------------------------------
+        # EXECUTE ORDER
+        # --------------------------------------------------
 
-            trade_data = {
+        order = self.exchange.create_market_order(
+            signal.symbol,
+            signal.side,
+            size,
+            signal.market
+        )
 
-                "order_id": order.get("id"),
-                "side": signal.side,
-                "entry": signal.entry,
-                "size": size,
-                "stop_loss": signal.stop_loss,
-                "take_profit": signal.take_profit,
-                "atr": signal.atr
+        if not order or not order.get("id"):
 
-            }
+            logger.error(f"[TRADE] order failed {signal.symbol}")
+            return
 
-            self.risk.register_open(
-                signal.symbol,
-                trade_data,
-                signal.market
-            )
+        trade_data = {
 
-            self.notifier.trade_opened(
-                symbol=signal.symbol,
-                side=signal.side,
-                size=size,
-                entry=signal.entry,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                market=signal.market,
-                strategy=signal.strategy,
-                confidence=signal.confidence
-            )
+            "order_id": order.get("id"),
+            "side": signal.side,
+            "entry": signal.entry,
+            "size": size,
+            "stop_loss": signal.stop_loss,
+            "take_profit": signal.take_profit,
+            "atr": signal.atr
 
-            logger.info(f"[TRADE] OPEN {signal.symbol} size={size}")
+        }
 
-        except Exception as e:
+        self.risk.register_open(
+            signal.symbol,
+            trade_data,
+            signal.market
+        )
 
-            logger.error(f"[TRADE] {signal.symbol} {e}")
+        self.notifier.trade_opened(
+            symbol=signal.symbol,
+            side=signal.side,
+            size=size,
+            entry=signal.entry,
+            stop_loss=signal.stop_loss,
+            take_profit=signal.take_profit,
+            market=signal.market,
+            strategy=signal.strategy,
+            confidence=signal.confidence
+        )
+
+        logger.info(
+            f"[TRADE] OPEN {signal.symbol} "
+            f"value={trade_value:.2f} size={size}"
+        )
+
+    except Exception as e:
+
+        logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
