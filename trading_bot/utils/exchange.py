@@ -115,31 +115,62 @@ class BitgetExchange:
 # MARKET DATA
 # ==========================================================
 
-    def fetch_ohlcv(self, symbol, timeframe, limit=300, market="spot"):
+    def fetch_ohlcv(self, symbol, timeframe, limit=300, market="futures"):
 
-        client = self.spot if market == "spot" else self.futures
+        try:
 
-        # normalize futures symbol
-        if market == "futures" and ":" not in symbol:
-            symbol = f"{symbol}:USDT"
+            client = self.futures if market == "spot" else self.futures
 
-        if symbol not in client.markets:
-            logger.info(f"[OHLCV] symbol not supported {symbol}")
+            # assicurati che i mercati siano caricati
+            if not getattr(client, "markets", None):
+                client.load_markets()
+
+            # ---------- normalize futures symbol ----------
+            if market == "futures":
+
+                if ":" not in symbol:
+                    symbol = f"{symbol}:USDT"
+
+            # ---------- verifica simbolo ----------
+            if symbol not in client.markets:
+                logger.info(f"[OHLCV] symbol not supported {symbol}")
+                return []
+
+            # ---------- params futures ----------
+            params = {}
+
+            if market == "futures":
+                params["productType"] = "USDT-FUTURES"
+
+            # ---------- fetch ----------
+            raw = self._retry(
+                client.fetch_ohlcv,
+                symbol,
+                timeframe,
+                limit=limit,
+                params=params
+            )
+
+            if not raw:
+                return []
+
+            # ---------- normalize output ----------
+            return [
+                {
+                    "ts": r[0],
+                    "open": r[1],
+                    "high": r[2],
+                    "low": r[3],
+                    "close": r[4],
+                    "volume": r[5],
+                }
+                for r in raw
+            ]
+
+        except Exception as e:
+
+            logger.debug(f"[OHLCV] error {symbol} {e}")
             return []
-
-        raw = self._retry(client.fetch_ohlcv, symbol, timeframe, limit=limit)
-
-        return [
-            {
-                "ts": r[0],
-                "open": r[1],
-                "high": r[2],
-                "low": r[3],
-                "close": r[4],
-                "volume": r[5],
-            }
-            for r in raw
-        ]
 
     def fetch_ticker(self, symbol, market="spot"):
 

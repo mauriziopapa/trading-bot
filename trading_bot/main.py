@@ -302,7 +302,7 @@ class TradingBot:
             if "symbol" not in c:
                 continue
 
-            symbol = f"{c['symbol'].upper()}/USDT"
+            symbol = f"{c['symbol'].upper()}/USDT:USDT"
 
             if symbol in settings.SPOT_SYMBOLS:
                 symbols.append(symbol)
@@ -322,7 +322,7 @@ class TradingBot:
                     symbol,
                     settings.TF_SCALP,
                     120,
-                    "spot"
+                    "futures"
                 )
 
                 if not ohlcv or len(ohlcv) < 50:
@@ -332,7 +332,7 @@ class TradingBot:
 
                 for strat in strategies:
 
-                    signal = strat.analyze(df, symbol, "spot")
+                    signal = strat.analyze(df, symbol, "futures")
 
                     logger.debug(
                         f"[STRATEGY] {strat.NAME} {symbol} "
@@ -381,7 +381,7 @@ class TradingBot:
                     symbol,
                     settings.TF_SWING,
                     300,
-                    "spot"
+                    "futures"
                 )
 
                 if not ohlcv:
@@ -426,7 +426,7 @@ class TradingBot:
 
             for coin in top:
 
-                symbol = f"{coin['symbol'].upper()}/USDT"
+                symbol = f"{coin['symbol'].upper()}/USDT:USDT"
 
                 if symbol not in settings.SPOT_SYMBOLS:
 
@@ -438,7 +438,7 @@ class TradingBot:
                     symbol,
                     settings.TF_SCALP,
                     150,
-                    "spot"
+                    "futures"
                 )
 
                 if not ohlcv:

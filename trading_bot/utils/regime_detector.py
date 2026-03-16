@@ -142,59 +142,80 @@ class RegimeDetector:
         # ---------- risk stats robust ----------
         try:
 
-            stats_obj = getattr(bot.risk, "stats", None)
+            stats = {}
 
-            if callable(stats_obj):
-                stats = stats_obj()
+            stats_attr = getattr(bot.risk, "stats", None)
 
-            elif isinstance(stats_obj, dict):
-                stats = stats_obj
+            if callable(stats_attr):
+                try:
+                    stats = stats_attr()
+                except Exception:
+                    stats = {}
 
-            else:
-                stats = {}
+            elif isinstance(stats_attr, dict):
+                stats = stats_attr
 
+            # ---------- core stats ----------
             signals["daily_pnl"] = stats.get("daily_pnl", 0)
             signals["consecutive_wins"] = stats.get("consecutive_wins", 0)
             signals["consecutive_losses"] = stats.get("consecutive_losses", 0)
             signals["total_trades"] = stats.get("total_trades", 0)
 
             signals["open_positions"] = (
-                stats.get("open_spot", 0) +
-                stats.get("open_futures", 0)
+                stats.get("open_spot", 0)
+                + stats.get("open_futures", 0)
             )
 
-            recent = getattr(bot.risk, "_recent_pnls", [])[-20:]
+            # ---------- winrate ----------
+            recent = getattr(bot.risk, "_recent_pnls", [])
 
-            if len(recent) >= 5:
-                wins = len([p for p in recent if p > 0])
-                signals["win_rate_recent"] = wins / len(recent) * 100
+            if isinstance(recent, list):
+                recent = recent[-20:]
 
+                if len(recent) >= 5:
+                    wins = sum(1 for p in recent if p > 0)
+                    signals["win_rate_recent"] = (wins / len(recent)) * 100
+
+            # ---------- drawdown ----------
             peak = getattr(bot.risk, "peak_balance", 0)
 
-            if hasattr(bot.risk, "_estimated_balance"):
-                current = bot.risk._estimated_balance()
-                if peak > 0:
-                    signals["drawdown_pct"] = (peak - current) / peak * 100
+            est_balance_fn = getattr(bot.risk, "_estimated_balance", None)
+
+            if callable(est_balance_fn) and peak > 0:
+
+                current = est_balance_fn()
+
+                if current is not None and peak > 0:
+                    signals["drawdown_pct"] = max(
+                        0,
+                        (peak - current) / peak * 100
+                    )
 
         except Exception as e:
-            logger.info(f"[REGIME] Stats error: {e}")
+            logger.debug(f"[REGIME] Stats error: {e}")
 
         # ---------- sentiment ----------
         try:
 
-            sent = bot._sentiment.get_sentiment()
+            sentiment_obj = getattr(bot, "_sentiment", None)
 
-            signals["fear_greed"] = sent.get("fear_greed", 50)
-            signals["funding_avg"] = (
-                sent.get("funding_btc", 0) +
-                sent.get("funding_eth", 0)
-            ) / 2
+            if sentiment_obj:
 
-            signals["ls_ratio"] = sent.get("ls_ratio_btc", 1.0)
-            signals["oi_delta"] = sent.get("oi_change_pct", 0)
+                sent = sentiment_obj.get_sentiment()
+
+                signals["fear_greed"] = sent.get("fear_greed", 50)
+
+                signals["funding_avg"] = (
+                    sent.get("funding_btc", 0)
+                    + sent.get("funding_eth", 0)
+                ) / 2
+
+                signals["ls_ratio"] = sent.get("ls_ratio_btc", 1.0)
+
+                signals["oi_delta"] = sent.get("oi_change_pct", 0)
 
         except Exception as e:
-            logger.info(f"[REGIME] Sentiment error: {e}")
+            logger.debug(f"[REGIME] Sentiment error: {e}")
 
         return signals
 
