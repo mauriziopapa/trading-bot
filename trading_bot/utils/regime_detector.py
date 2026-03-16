@@ -177,7 +177,7 @@ class RegimeDetector:
                     signals["drawdown_pct"] = (peak - current) / peak * 100
 
         except Exception as e:
-            logger.debug(f"[REGIME] Stats error: {e}")
+            logger.info(f"[REGIME] Stats error: {e}")
 
         # ---------- sentiment ----------
         try:
@@ -194,7 +194,7 @@ class RegimeDetector:
             signals["oi_delta"] = sent.get("oi_change_pct", 0)
 
         except Exception as e:
-            logger.debug(f"[REGIME] Sentiment error: {e}")
+            logger.info(f"[REGIME] Sentiment error: {e}")
 
         return signals
 
@@ -219,7 +219,7 @@ class RegimeDetector:
             safe_reasons.append("extreme sentiment")
 
         if safe_reasons:
-            logger.debug(f"[REGIME] SAFE triggers {safe_reasons}")
+            logger.info(f"[REGIME] SAFE triggers {safe_reasons}")
             return "safe"
 
         aggro_checks = {
@@ -237,7 +237,7 @@ class RegimeDetector:
         passed = sum(aggro_checks.values())
 
         if passed >= 6:
-            logger.debug(f"[REGIME] AGGRO score {passed}/8")
+            logger.info(f"[REGIME] AGGRO score {passed}/8")
             return "aggro"
 
         return "normal"

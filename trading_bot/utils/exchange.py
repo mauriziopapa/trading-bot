@@ -99,7 +99,7 @@ class BitgetExchange:
             except Exception as e:
 
                 if "not modified" not in str(e).lower():
-                    logger.debug(f"leverage {symbol}: {e}")
+                    logger.info(f"leverage {symbol}: {e}")
 
         self._last_leverage_setup = lev
 
@@ -122,7 +122,7 @@ class BitgetExchange:
 
         # 🔧 FIX: controllo simbolo valido
         if symbol not in markets:
-            logger.debug(f"[OHLCV] symbol not supported {symbol}")
+            logger.info(f"[OHLCV] symbol not supported {symbol}")
             return None
 
         raw = self._retry(client.fetch_ohlcv, symbol, timeframe, limit=limit)
@@ -148,7 +148,7 @@ class BitgetExchange:
         markets = self._spot_markets if market == "spot" else self._futures_markets
 
         if symbol not in markets:
-            logger.debug(f"[TICKER] symbol not supported {symbol}")
+            logger.info(f"[TICKER] symbol not supported {symbol}")
             return None
 
         t = self._retry(client.fetch_ticker, symbol)
@@ -190,7 +190,7 @@ class BitgetExchange:
 # ORDERS
 # ==========================================================
 
-    def create_market_order(self, symbol, side, amount, market="spot", params=None):
+    def create_market_order(self, symbol, side, amount, market="futures", params=None):
 
         if not settings.IS_LIVE:
 

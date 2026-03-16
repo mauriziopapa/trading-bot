@@ -287,7 +287,7 @@ class DynamicSettings:
     def IS_LIVE(self)       -> bool: return self.TRADING_MODE == "live"
     @property
     def MARKET_TYPES(self)  -> list:
-        return [s.strip() for s in os.getenv("MARKET_TYPES", "spot,futures").split(",") if s.strip()]
+        return [s.strip() for s in os.getenv("MARKET_TYPES", "futures").split(",") if s.strip()]
     @property
     def SPOT_SYMBOLS(self) -> list:
         raw = os.getenv("SPOT_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT").strip()

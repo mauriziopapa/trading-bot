@@ -510,37 +510,65 @@ class TradingBot:
 
         try:
 
-            balance = self.exchange.get_usdt_balance(signal.market) or 0
+            # ---------------------------------------
+            # MARKET ROUTING (prefer futures)
+            # ---------------------------------------
+
+            market = "futures"
+
+            # allow spot long if strategy explicitly requests it
+            if signal.side == "buy" and signal.market == "spot":
+                market = "spot"
+
+            symbol = signal.symbol
+            side = signal.side
+
+            # ---------------------------------------
+            # BALANCE CHECK
+            # ---------------------------------------
+
+            balance = self.exchange.get_usdt_balance(market) or 0
 
             if balance < 5:
                 logger.warning("[TRADE] balance too low")
                 return
 
+            # keep safety buffer
             balance_safe = balance * 0.92
+
+            # ---------------------------------------
+            # POSITION SIZE
+            # ---------------------------------------
 
             size = self.risk.position_size(
                 balance_safe,
                 signal.entry,
                 signal.stop_loss,
                 signal.atr,
-                signal.market,
-                symbol=signal.symbol
+                market,
+                symbol=symbol
             )
 
             if size <= 0:
+                logger.debug(f"[TRADE] size zero {symbol}")
                 return
 
             trade_value = size * signal.entry
 
+            # cap by balance
             if trade_value > balance_safe:
                 size = balance_safe / signal.entry
                 trade_value = size * signal.entry
 
+            # minimum order size protection
             if trade_value < 5:
-                logger.warning(f"[TRADE] too small {signal.symbol}")
+                logger.warning(f"[TRADE] too small {symbol}")
                 return
 
-            # SPOT cannot short
+            # ---------------------------------------
+            # SPOT SHORT PROTECTION
+            # ---------------------------------------
+
             if market == "spot" and side == "sell":
 
                 bal = self.exchange.fetch_balance("spot")
@@ -549,23 +577,37 @@ class TradingBot:
                 if float(bal.get(base, {}).get("free", 0)) <= 0:
                     logger.warning(f"[TRADE] skip sell {symbol} no asset")
                     return
-                    
+
+            # ---------------------------------------
+            # EXECUTE ORDER
+            # ---------------------------------------
+
+            params = {}
+
+            if market == "futures":
+                params["reduceOnly"] = False
+
             order = self.exchange.create_market_order(
-                signal.symbol,
-                signal.side,
+                symbol,
+                side,
                 size,
-                signal.market
+                market,
+                params=params
             )
 
             if not order or not order.get("id"):
-                logger.error(f"[TRADE] order failed {signal.symbol}")
+                logger.error(f"[TRADE] order failed {symbol}")
                 return
 
             filled = float(order.get("filled", size))
 
+            # ---------------------------------------
+            # REGISTER TRADE
+            # ---------------------------------------
+
             trade_data = {
                 "order_id": order.get("id"),
-                "side": signal.side,
+                "side": side,
                 "entry": signal.entry,
                 "size": filled,
                 "stop_loss": signal.stop_loss,
@@ -575,17 +617,21 @@ class TradingBot:
 
             # register in memory
             self.risk.register_open(
-                signal.symbol,
+                symbol,
                 trade_data,
-                signal.market
+                market
             )
 
-            # save to DB
+            # ---------------------------------------
+            # SAVE TO DATABASE
+            # ---------------------------------------
+
             try:
+
                 self.db.insert_trade({
-                    "symbol": signal.symbol,
-                    "market": signal.market,
-                    "side": signal.side,
+                    "symbol": symbol,
+                    "market": market,
+                    "side": side,
                     "entry": signal.entry,
                     "size": filled,
                     "stop_loss": signal.stop_loss,
@@ -594,28 +640,33 @@ class TradingBot:
                     "status": "open",
                     "created_at": int(time.time())
                 })
+
             except Exception as e:
                 logger.error(f"[DB] save trade failed {e}")
 
-            # notifier
+            # ---------------------------------------
+            # NOTIFICATION
+            # ---------------------------------------
+
             self.notifier.trade_opened(
-                symbol=signal.symbol,
-                side=signal.side,
+                symbol=symbol,
+                side=side,
                 size=filled,
                 entry=signal.entry,
                 stop_loss=signal.stop_loss,
                 take_profit=signal.take_profit,
-                market=signal.market,
+                market=market,
                 strategy=signal.strategy,
                 confidence=signal.confidence
             )
 
             logger.info(
-                f"[TRADE] OPEN {signal.symbol} "
-                f"value={trade_value:.2f}"
+                f"[TRADE] OPEN {symbol} {side} "
+                f"value={trade_value:.2f} market={market}"
             )
 
         except Exception as e:
+
             logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
