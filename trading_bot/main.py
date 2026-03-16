@@ -287,6 +287,11 @@ class TradingBot:
 
                     signal = strat.analyze(df, symbol, "spot")
 
+                    logger.debug(
+                        f"[STRATEGY] {strat.NAME} {symbol} "
+                        f"signal={'YES' if signal else 'NO'}"
+                    )
+
                     if not signal:
                         continue
 
