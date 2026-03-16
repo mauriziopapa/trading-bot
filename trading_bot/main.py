@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v7.2
+Bitget Trading Bot — Main Orchestrator v7.3
 Stable + Dashboard + Emerging Momentum Trading
 """
 
@@ -131,13 +131,14 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v7.2")
+        logger.info("BITGET TRADING BOT v7.3")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
             self._start_dashboard()
 
         self.exchange.initialize()
+
         self.db.connect()
         self.risk.db = self.db
         self.risk.recover_from_db()
@@ -146,8 +147,8 @@ class TradingBot:
 
         try:
 
-            spot = self.exchange.get_usdt_balance("spot")
-            futures = self.exchange.get_usdt_balance("futures")
+            spot = self.exchange.get_usdt_balance("spot") or 0
+            futures = self.exchange.get_usdt_balance("futures") or 0
 
             self.notifier.startup(
                 settings.TRADING_MODE,
@@ -230,49 +231,6 @@ class TradingBot:
         if DASHBOARD_ENABLED:
             schedule.every(20).seconds.do(self._update_dashboard)
 
-def _scan_scalping(self):
-
-    logger.info("[SCALPING] scan")
-
-    strategies = [s for s in self.strategies if getattr(s, "NAME", "") == "SCALPING"]
-
-    if not strategies:
-        return
-
-    symbols = settings.SPOT_SYMBOLS[:15]
-
-    for symbol in symbols:
-
-        try:
-
-            ohlcv = self.exchange.fetch_ohlcv(
-                symbol,
-                settings.TF_SCALP,
-                120,
-                "spot"
-            )
-
-            if not ohlcv or len(ohlcv) < 50:
-                continue
-
-            df = ohlcv_to_df(ohlcv)
-
-            for strat in strategies:
-
-                signal = strat.analyze(df, symbol, "spot")
-
-                if not signal:
-                    continue
-
-                logger.info(f"[SCALPING SIGNAL] {symbol}")
-
-                self._track_signal(signal)
-
-                self._process_signal(signal)
-
-        except Exception as e:
-
-            logger.error(f"[SCALPING] {symbol} {e}")
 
 # --------------------------------------------------
 # BALANCE
@@ -282,8 +240,8 @@ def _scan_scalping(self):
 
         try:
 
-            spot = self.exchange.get_usdt_balance("spot")
-            futures = self.exchange.get_usdt_balance("futures")
+            spot = self.exchange.get_usdt_balance("spot") or 0
+            futures = self.exchange.get_usdt_balance("futures") or 0
 
             total = spot + futures
 
@@ -297,6 +255,52 @@ def _scan_scalping(self):
 
 
 # --------------------------------------------------
+# SCALPING
+# --------------------------------------------------
+
+    def _scan_scalping(self):
+
+        logger.info("[SCALPING] scan")
+
+        strategies = [s for s in self.strategies if getattr(s, "NAME", "") == "SCALPING"]
+
+        if not strategies:
+            return
+
+        for symbol in settings.SPOT_SYMBOLS[:15]:
+
+            try:
+
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol,
+                    settings.TF_SCALP,
+                    120,
+                    "spot"
+                )
+
+                if not ohlcv or len(ohlcv) < 50:
+                    continue
+
+                df = ohlcv_to_df(ohlcv)
+
+                for strat in strategies:
+
+                    signal = strat.analyze(df, symbol, "spot")
+
+                    if not signal:
+                        continue
+
+                    logger.info(f"[SCALPING SIGNAL] {symbol}")
+
+                    self._track_signal(signal)
+                    self._process_signal(signal)
+
+            except Exception as e:
+
+                logger.error(f"[SCALPING] {symbol} {e}")
+
+
+# --------------------------------------------------
 # SWING SCAN
 # --------------------------------------------------
 
@@ -307,7 +311,6 @@ def _scan_scalping(self):
         if now.minute % 15 == 0 and now.second < 5:
 
             time.sleep(2)
-
             self._scan_swing()
 
 
@@ -416,106 +419,112 @@ def _scan_scalping(self):
 # PROCESS SIGNAL
 # --------------------------------------------------
 
-def _process_signal(self, signal):
+    def _process_signal(self, signal):
 
-    stats = self.risk.stats()
+        try:
 
-    if signal.market == "spot":
+            stats = self.risk.stats() or {}
 
-        if stats["open_trades"] >= settings.MAX_POSITIONS_SPOT:
-            return
+            open_trades = stats.get("open_trades", 0)
 
-    else:
+            if signal.market == "spot":
 
-        if stats["open_trades"] >= settings.MAX_POSITIONS_FUTURES:
-            return
+                if open_trades >= settings.MAX_POSITIONS_SPOT:
+                    return
 
-    try:
+            else:
 
-        if not self.risk.reserve_symbol(signal.symbol):
-            return
+                if open_trades >= settings.MAX_POSITIONS_FUTURES:
+                    return
 
-        self._execute_signal(signal)
+            if not self.risk.reserve_symbol(signal.symbol):
+                return
 
-    finally:
+            try:
+                self._execute_signal(signal)
+            finally:
+                self.risk.release_symbol(signal.symbol)
 
-        self.risk.release_symbol(signal.symbol)
+        except Exception as e:
+
+            logger.error(f"[PROCESS SIGNAL] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
 # EXECUTE TRADE
 # --------------------------------------------------
 
-def _execute_signal(self, signal):
+    def _execute_signal(self, signal):
 
-    try:
+        try:
 
-        balance = self.exchange.get_usdt_balance(signal.market)
+            balance = self.exchange.get_usdt_balance(signal.market) or 0
 
-        if balance < 5:
-            logger.warning("[TRADE] balance too low")
-            return
+            if balance < 5:
+                logger.warning("[TRADE] balance too low")
+                return
 
-        size = self.risk.position_size(
-            balance,
-            signal.entry,
-            signal.stop_loss,
-            signal.atr,
-            signal.market,
-            symbol=signal.symbol
-        )
+            size = self.risk.position_size(
+                balance,
+                signal.entry,
+                signal.stop_loss,
+                signal.atr,
+                signal.market,
+                symbol=signal.symbol
+            )
 
-        if size <= 0:
-            logger.warning("[TRADE] size=0")
-            return
+            if size <= 0:
+                logger.warning("[TRADE] size=0")
+                return
 
-        order = self.exchange.create_market_order(
-            signal.symbol,
-            signal.side,
-            size,
-            signal.market
-        )
+            order = self.exchange.create_market_order(
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market
+            )
 
-        if not order or not order.get("id"):
+            if not order or not order.get("id"):
 
-            logger.error(f"[TRADE] order failed {signal.symbol}")
-            return
+                logger.error(f"[TRADE] order failed {signal.symbol}")
+                return
 
-        trade_data = {
+            trade_data = {
 
-            "order_id": order.get("id"),
-            "side": signal.side,
-            "entry": signal.entry,
-            "size": size,
-            "stop_loss": signal.stop_loss,
-            "take_profit": signal.take_profit,
-            "atr": signal.atr
+                "order_id": order.get("id"),
+                "side": signal.side,
+                "entry": signal.entry,
+                "size": size,
+                "stop_loss": signal.stop_loss,
+                "take_profit": signal.take_profit,
+                "atr": signal.atr
 
-        }
+            }
 
-        self.risk.register_open(
-            signal.symbol,
-            trade_data,
-            signal.market
-        )
+            self.risk.register_open(
+                signal.symbol,
+                trade_data,
+                signal.market
+            )
 
-        self.notifier.trade_opened(
-            symbol=signal.symbol,
-            side=signal.side,
-            size=size,
-            entry=signal.entry,
-            stop_loss=signal.stop_loss,
-            take_profit=signal.take_profit,
-            market=signal.market,
-            strategy=signal.strategy,
-            confidence=signal.confidence
-        )
+            self.notifier.trade_opened(
+                symbol=signal.symbol,
+                side=signal.side,
+                size=size,
+                entry=signal.entry,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                market=signal.market,
+                strategy=signal.strategy,
+                confidence=signal.confidence
+            )
 
-        logger.info(f"[TRADE] OPEN {signal.symbol} size={size}")
+            logger.info(f"[TRADE] OPEN {signal.symbol} size={size}")
 
-    except Exception as e:
+        except Exception as e:
 
-        logger.error(f"[TRADE] {signal.symbol} {e}")
+            logger.error(f"[TRADE] {signal.symbol} {e}")
+
 
 # --------------------------------------------------
 # MONITOR POSITIONS
