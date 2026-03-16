@@ -1,404 +1,275 @@
 """
 Regime Detector — Cambio automatico strategia
-═══════════════════════════════════════════════════════════════
-Analizza 10 segnali per determinare il regime di mercato:
-
-  🛡️ SAFE    — proteggi capitale (conservativa)
-  🚀 NORMAL  — crescita bilanciata (raddoppio)
-  💎 AGGRO   — massima esposizione (all-in)
-
-Regole:
-  - SAFE scatta con UN SOLO segnale negativo (asimmetrico)
-  - AGGRO richiede TUTTI i segnali positivi
-  - NORMAL è il default (nessun estremo)
-  - Cooldown 30 min tra cambi (no oscillazione)
-  - Override manuale blocca auto-switch per 2h
-  - Ogni cambio viene loggato + notifica Telegram
-
-Chiamato ogni 5 minuti dallo scheduler in main.py.
+Versione ottimizzata per maggiore frequenza di trading
 """
 
 import time
 from loguru import logger
 
 
-# ── Configurazioni per ogni regime ───────────────────────────────────────────
 REGIME_CONFIGS = {
+
     "safe": {
         "label": "🎯 Sniper",
         "config": {
-            "MAX_RISK_PCT":           10.0,
-            "DEFAULT_LEVERAGE":       15,
-            "MAX_DAILY_LOSS_PCT":     18.0,
-            "MAX_DRAWDOWN_PCT":       30,
-            "TAKE_PROFIT_RATIO":      4.0,
-            "TRAILING_STOP_PCT":      1.5,
-            "MIN_CONFIDENCE":         68.0,
-            "MAX_POSITIONS_SPOT":     3,
-            "MAX_POSITIONS_FUTURES":  5,
-            "MARGIN_MODE":            "isolated",
-            "MAX_NOTIONAL_PCT":       80,
-            "ENABLE_RSI_MACD":        True,
-            "ENABLE_BOLLINGER":       True,
-            "ENABLE_BREAKOUT":        True,
-            "ENABLE_SCALPING":        True,
-            "ENABLE_EMERGING":        True,
-            "SENTIMENT_BYPASS":       False,
-            "FEAR_GREED_LONG_MIN":    5,
-            "FEAR_GREED_LONG_MAX":    88,
-            "FEAR_GREED_SHORT_MIN":   12,
-            "FEAR_GREED_SHORT_MAX":   100,
-            "EM_MIN_VOLUME_USD":      150000,
-            "EM_MIN_CHANGE_24H":      1.0,
-            "EM_MIN_VOLUME_SURGE":    1.0,
-            "EM_MAX_MARKET_CAP":      5000000000,
-            "EM_MIN_MARKET_CAP":      0,
-            "EM_MAX_RESULTS":         20,
-            "EM_NEW_LISTING_DAYS":    60,
-            "EM_EXCLUDE_SYMBOLS":     "",
-            "EMERGING_DIRECT_SCORE":  30.0,
-            "EMERGING_MOMENTUM_CHG":  2.0,
-            "EMERGING_RISK_MULT":     2.0,
-            "EMERGING_MAX_SPREAD":    1.5,
+            "MAX_RISK_PCT": 10,
+            "DEFAULT_LEVERAGE": 12,
+            "MAX_DAILY_LOSS_PCT": 15,
+            "MAX_DRAWDOWN_PCT": 30,
+            "MIN_CONFIDENCE": 60,
+            "MAX_POSITIONS_SPOT": 4,
+            "MAX_POSITIONS_FUTURES": 4,
+            "EM_MIN_VOLUME_USD": 120000,
+            "EM_MIN_CHANGE_24H": 1.2,
         },
     },
+
     "normal": {
         "label": "⚡ Blitz",
         "config": {
-            "MAX_RISK_PCT":           12.0,
-            "DEFAULT_LEVERAGE":       15,
-            "MAX_DAILY_LOSS_PCT":     25.0,
-            "MAX_DRAWDOWN_PCT":       40,
-            "TAKE_PROFIT_RATIO":      1.8,
-            "TRAILING_STOP_PCT":      0.5,
-            "MIN_CONFIDENCE":         50.0,
-            "MAX_POSITIONS_SPOT":     8,
-            "MAX_POSITIONS_FUTURES":  8,
-            "MARGIN_MODE":            "isolated",
-            "MAX_NOTIONAL_PCT":       70,
-            "ENABLE_RSI_MACD":        True,
-            "ENABLE_BOLLINGER":       True,
-            "ENABLE_BREAKOUT":        True,
-            "ENABLE_SCALPING":        True,
-            "ENABLE_EMERGING":        True,
-            "SENTIMENT_BYPASS":       True,
-            "FEAR_GREED_LONG_MIN":    0,
-            "FEAR_GREED_LONG_MAX":    100,
-            "FEAR_GREED_SHORT_MIN":   0,
-            "FEAR_GREED_SHORT_MAX":   100,
-            "EM_MIN_VOLUME_USD":      80000,
-            "EM_MIN_CHANGE_24H":      0.5,
-            "EM_MIN_VOLUME_SURGE":    1.0,
-            "EM_MAX_MARKET_CAP":      10000000000,
-            "EM_MIN_MARKET_CAP":      0,
-            "EM_MAX_RESULTS":         30,
-            "EM_NEW_LISTING_DAYS":    90,
-            "EM_EXCLUDE_SYMBOLS":     "",
-            "EMERGING_DIRECT_SCORE":  20.0,
-            "EMERGING_MOMENTUM_CHG":  1.5,
-            "EMERGING_RISK_MULT":     2.5,
-            "EMERGING_MAX_SPREAD":    2.0,
+            "MAX_RISK_PCT": 12,
+            "DEFAULT_LEVERAGE": 15,
+            "MAX_DAILY_LOSS_PCT": 25,
+            "MAX_DRAWDOWN_PCT": 40,
+            "MIN_CONFIDENCE": 46,
+            "MAX_POSITIONS_SPOT": 12,
+            "MAX_POSITIONS_FUTURES": 12,
+            "EM_MIN_VOLUME_USD": 50000,
+            "EM_MIN_CHANGE_24H": 0.3,
         },
     },
+
     "aggro": {
         "label": "🔥 YOLO",
         "config": {
-            "MAX_RISK_PCT":           15.0,
-            "DEFAULT_LEVERAGE":       20,
-            "MAX_DAILY_LOSS_PCT":     35.0,
-            "MAX_DRAWDOWN_PCT":       50,
-            "TAKE_PROFIT_RATIO":      2.5,
-            "TRAILING_STOP_PCT":      0.4,
-            "MIN_CONFIDENCE":         48.0,
-            "MAX_POSITIONS_SPOT":     4,
-            "MAX_POSITIONS_FUTURES":  4,
-            "MARGIN_MODE":            "isolated",
-            "MAX_NOTIONAL_PCT":       95,
-            "ENABLE_RSI_MACD":        True,
-            "ENABLE_BOLLINGER":       True,
-            "ENABLE_BREAKOUT":        True,
-            "ENABLE_SCALPING":        True,
-            "ENABLE_EMERGING":        True,
-            "SENTIMENT_BYPASS":       True,
-            "FEAR_GREED_LONG_MIN":    0,
-            "FEAR_GREED_LONG_MAX":    100,
-            "FEAR_GREED_SHORT_MIN":   0,
-            "FEAR_GREED_SHORT_MAX":   100,
-            "EM_MIN_VOLUME_USD":      50000,
-            "EM_MIN_CHANGE_24H":      0.3,
-            "EM_MIN_VOLUME_SURGE":    1.0,
-            "EM_MAX_MARKET_CAP":      15000000000,
-            "EM_MIN_MARKET_CAP":      0,
-            "EM_MAX_RESULTS":         30,
-            "EM_NEW_LISTING_DAYS":    120,
-            "EM_EXCLUDE_SYMBOLS":     "",
-            "EMERGING_DIRECT_SCORE":  15.0,
-            "EMERGING_MOMENTUM_CHG":  1.0,
-            "EMERGING_RISK_MULT":     3.0,
-            "EMERGING_MAX_SPREAD":    2.5,
+            "MAX_RISK_PCT": 15,
+            "DEFAULT_LEVERAGE": 20,
+            "MAX_DAILY_LOSS_PCT": 35,
+            "MAX_DRAWDOWN_PCT": 50,
+            "MIN_CONFIDENCE": 44,
+            "MAX_POSITIONS_SPOT": 14,
+            "MAX_POSITIONS_FUTURES": 14,
+            "EM_MIN_VOLUME_USD": 30000,
+            "EM_MIN_CHANGE_24H": 0.2,
         },
     },
 }
 
 
 class RegimeDetector:
-    """
-    Analizza le condizioni di mercato e la performance del bot
-    per determinare il regime ottimale e applicarlo automaticamente.
-    """
 
-    COOLDOWN_SEC = 1800         # 30 minuti tra cambi regime
-    MANUAL_OVERRIDE_SEC = 7200  # 2 ore di blocco dopo click manuale
+    COOLDOWN_SEC = 900
+    MANUAL_OVERRIDE_SEC = 7200
 
     def __init__(self):
-        self.current_regime: str = "normal"
-        self._last_switch_ts: float = 0.0
-        self._manual_override_ts: float = 0.0
-        self._last_signals: dict = {}
 
-    # ─── Public API ──────────────────────────────────────────────────────────
+        self.current_regime = "normal"
+        self._last_switch_ts = 0
+        self._manual_override_ts = 0
+        self._last_signals = {}
 
-    def evaluate(self, bot) -> dict:
-        """
-        Valuta il regime ottimale. Chiamato ogni 5 minuti.
-        Ritorna un dict con stato completo per la dashboard.
+    # ============================================================
+    # PUBLIC
+    # ============================================================
 
-        Parametri letti dal bot:
-          - risk_manager: stats, drawdown, streak
-          - sentiment_analyzer: F&G, funding, OI
-          - performance: win rate, daily PnL
-        """
+    def evaluate(self, bot):
+
         now = time.time()
 
-        # ── Raccogli segnali ─────────────────────────────────────────────
         signals = self._collect_signals(bot)
         self._last_signals = signals
 
-        # ── Determina regime ideale ──────────────────────────────────────
         ideal = self._compute_ideal_regime(signals)
 
-        # ── Controlla se possiamo cambiare ───────────────────────────────
         can_switch = True
         reason_blocked = ""
 
-        # Cooldown
         if (now - self._last_switch_ts) < self.COOLDOWN_SEC:
-            remaining = int(self.COOLDOWN_SEC - (now - self._last_switch_ts))
             can_switch = False
-            reason_blocked = f"Cooldown attivo ({remaining}s)"
+            reason_blocked = "cooldown"
 
-        # Override manuale
         if (now - self._manual_override_ts) < self.MANUAL_OVERRIDE_SEC:
-            remaining = int(self.MANUAL_OVERRIDE_SEC - (now - self._manual_override_ts))
             can_switch = False
-            reason_blocked = f"Override manuale attivo ({remaining // 60}min)"
+            reason_blocked = "manual override"
 
-        # ── Applica se necessario ────────────────────────────────────────
         switched = False
+
         if ideal != self.current_regime and can_switch:
+
             old = self.current_regime
             self.current_regime = ideal
             self._last_switch_ts = now
             switched = True
+
             self._apply_regime(bot, ideal, signals)
+
             logger.warning(
-                f"[REGIME] ⚡ CAMBIO: {REGIME_CONFIGS[old]['label']} → "
-                f"{REGIME_CONFIGS[ideal]['label']} | Motivo: {self._explain(signals, ideal)}"
+                f"[REGIME] ⚡ {REGIME_CONFIGS[old]['label']} → {REGIME_CONFIGS[ideal]['label']}"
             )
 
         return {
-            "current_regime":    self.current_regime,
-            "current_label":     REGIME_CONFIGS[self.current_regime]["label"],
-            "ideal_regime":      ideal,
-            "ideal_label":       REGIME_CONFIGS[ideal]["label"],
-            "switched":          switched,
-            "can_switch":        can_switch,
-            "reason_blocked":    reason_blocked,
-            "signals":           signals,
-            "auto_enabled":      True,
-            "override_until":    self._manual_override_ts + self.MANUAL_OVERRIDE_SEC
-                                 if (now - self._manual_override_ts) < self.MANUAL_OVERRIDE_SEC else 0,
+            "current_regime": self.current_regime,
+            "ideal_regime": ideal,
+            "switched": switched,
+            "signals": signals,
+            "can_switch": can_switch,
+            "reason_blocked": reason_blocked
         }
 
     def set_manual_override(self):
-        """Chiamato quando l'utente clicca un pulsante strategia manualmente."""
         self._manual_override_ts = time.time()
-        logger.info(f"[REGIME] Override manuale attivato — auto-switch bloccato per 2h")
 
-    def get_state(self) -> dict:
-        """Stato corrente per la dashboard (senza ricalcolo)."""
-        now = time.time()
-        override_remaining = max(0, self.MANUAL_OVERRIDE_SEC - (now - self._manual_override_ts))
-        cooldown_remaining = max(0, self.COOLDOWN_SEC - (now - self._last_switch_ts))
-        return {
-            "current_regime":   self.current_regime,
-            "current_label":    REGIME_CONFIGS[self.current_regime]["label"],
-            "signals":          self._last_signals,
-            "auto_enabled":     True,
-            "override_remaining_sec": int(override_remaining),
-            "cooldown_remaining_sec": int(cooldown_remaining),
-        }
+    # ============================================================
+    # SIGNAL COLLECTION
+    # ============================================================
 
-    # ─── Segnali ─────────────────────────────────────────────────────────────
+    def _collect_signals(self, bot):
 
-    def _collect_signals(self, bot) -> dict:
-        """Raccoglie tutti i segnali per la decisione regime."""
         signals = {
-            "drawdown_pct":       0.0,
-            "daily_pnl":          0.0,
-            "win_rate_recent":    50.0,
-            "consecutive_wins":   0,
+            "drawdown_pct": 0,
+            "daily_pnl": 0,
+            "win_rate_recent": 50,
+            "consecutive_wins": 0,
             "consecutive_losses": 0,
-            "fear_greed":         50,
-            "funding_avg":        0.0,
-            "ls_ratio":           1.0,
-            "oi_delta":           0.0,
-            "open_positions":     0,
-            "total_trades":       0,
+            "fear_greed": 50,
+            "funding_avg": 0,
+            "ls_ratio": 1,
+            "oi_delta": 0,
+            "open_positions": 0,
+            "total_trades": 0,
         }
 
-        # ── Risk manager stats ───────────────────────────────────────────
+        # ---------- risk stats robust ----------
         try:
-            stats = bot.risk.stats()
-            signals["daily_pnl"]          = stats.get("daily_pnl", 0)
-            signals["consecutive_wins"]   = stats.get("consecutive_wins", 0)
-            signals["consecutive_losses"] = stats.get("consecutive_losses", 0)
-            signals["total_trades"]       = stats.get("total_trades", 0)
-            signals["open_positions"]     = stats.get("open_spot", 0) + stats.get("open_futures", 0)
 
-            # Win rate su ultimi trade (non lifetime)
-            recent = bot.risk._recent_pnls[-20:]
-            if len(recent) >= 5:
-                signals["win_rate_recent"] = len([p for p in recent if p > 0]) / len(recent) * 100
+            stats_fn = getattr(bot.risk, "stats", None)
+
+            if callable(stats_fn):
+                stats = stats_fn()
             else:
-                signals["win_rate_recent"] = stats.get("win_rate", 50)
+                stats = {}
 
-            # Drawdown
-            peak = bot.risk.peak_balance
-            current = bot.risk._estimated_balance()
-            if peak > 0:
-                signals["drawdown_pct"] = (peak - current) / peak * 100
+            signals["daily_pnl"] = stats.get("daily_pnl", 0)
+            signals["consecutive_wins"] = stats.get("consecutive_wins", 0)
+            signals["consecutive_losses"] = stats.get("consecutive_losses", 0)
+            signals["total_trades"] = stats.get("total_trades", 0)
+
+            signals["open_positions"] = (
+                stats.get("open_spot", 0) +
+                stats.get("open_futures", 0)
+            )
+
+            recent = getattr(bot.risk, "_recent_pnls", [])[-20:]
+
+            if len(recent) >= 5:
+                wins = len([p for p in recent if p > 0])
+                signals["win_rate_recent"] = wins / len(recent) * 100
+
+            peak = getattr(bot.risk, "peak_balance", 0)
+
+            if hasattr(bot.risk, "_estimated_balance"):
+                current = bot.risk._estimated_balance()
+                if peak > 0:
+                    signals["drawdown_pct"] = (peak - current) / peak * 100
+
         except Exception as e:
             logger.debug(f"[REGIME] Stats error: {e}")
 
-        # ── Sentiment ────────────────────────────────────────────────────
+        # ---------- sentiment ----------
         try:
+
             sent = bot._sentiment.get_sentiment()
-            signals["fear_greed"]   = sent.get("fear_greed", 50)
-            signals["funding_avg"]  = (sent.get("funding_btc", 0) + sent.get("funding_eth", 0)) / 2
-            signals["ls_ratio"]     = sent.get("ls_ratio_btc", 1.0)
-            signals["oi_delta"]     = sent.get("oi_change_pct", 0)
+
+            signals["fear_greed"] = sent.get("fear_greed", 50)
+            signals["funding_avg"] = (
+                sent.get("funding_btc", 0) +
+                sent.get("funding_eth", 0)
+            ) / 2
+
+            signals["ls_ratio"] = sent.get("ls_ratio_btc", 1.0)
+            signals["oi_delta"] = sent.get("oi_change_pct", 0)
+
         except Exception as e:
             logger.debug(f"[REGIME] Sentiment error: {e}")
 
         return signals
 
-    # ─── Regime computation ──────────────────────────────────────────────────
+    # ============================================================
+    # REGIME DECISION
+    # ============================================================
 
-    def _compute_ideal_regime(self, s: dict) -> str:
-        """
-        Logica asimmetrica:
-          SAFE: basta UN segnale critico (protezione prioritaria)
-          AGGRO: servono TUTTI i segnali positivi (certezza prima di spingere)
-          NORMAL: default
-        """
+    def _compute_ideal_regime(self, s):
 
-        # ══════════ SAFE — UN SOLO trigger basta ══════════════════════════
         safe_reasons = []
 
-        if s["drawdown_pct"] > 12:
-            safe_reasons.append(f"DD {s['drawdown_pct']:.1f}% > 12%")
-        if s["daily_pnl"] < -8:
-            safe_reasons.append(f"Daily PnL {s['daily_pnl']:.1f}% < -8%")
-        if s["win_rate_recent"] < 35 and s["total_trades"] >= 10:
-            safe_reasons.append(f"WR {s['win_rate_recent']:.0f}% < 35%")
-        if s["consecutive_losses"] >= 4:
-            safe_reasons.append(f"Losing streak ×{s['consecutive_losses']}")
-        if s["fear_greed"] < 10:
-            safe_reasons.append(f"F&G={s['fear_greed']} Extreme Fear")
-        if s["fear_greed"] > 90:
-            safe_reasons.append(f"F&G={s['fear_greed']} Extreme Greed")
-        if s["funding_avg"] > 0.12:
-            safe_reasons.append(f"Funding {s['funding_avg']:.3f}% overheated")
-        if s["ls_ratio"] > 2.5:
-            safe_reasons.append(f"L/S {s['ls_ratio']:.2f} extreme long crowding")
+        if s["drawdown_pct"] > 18:
+            safe_reasons.append("drawdown")
+
+        if s["daily_pnl"] < -10:
+            safe_reasons.append("daily loss")
+
+        if s["consecutive_losses"] >= 5:
+            safe_reasons.append("loss streak")
+
+        if s["fear_greed"] < 8 or s["fear_greed"] > 92:
+            safe_reasons.append("extreme sentiment")
 
         if safe_reasons:
-            logger.debug(f"[REGIME] SAFE triggers: {', '.join(safe_reasons)}")
+            logger.debug(f"[REGIME] SAFE triggers {safe_reasons}")
             return "safe"
 
-        # ══════════ AGGRO — TUTTI i criteri devono essere soddisfatti ═════
         aggro_checks = {
-            "DD basso":        s["drawdown_pct"] < 3,
-            "WR alto":         s["win_rate_recent"] > 58 or s["total_trades"] < 10,
-            "Win streak":      s["consecutive_wins"] >= 3 or s["total_trades"] < 5,
-            "Daily PnL +":     s["daily_pnl"] >= 0 if s["total_trades"] < 5 else s["daily_pnl"] > 2,
-            "F&G operativo":   20 <= s["fear_greed"] <= 75,
-            "Funding ok":      abs(s["funding_avg"]) < 0.08,
-            "L/S bilanciato":  0.5 < s["ls_ratio"] < 2.0,
-            "No loss streak":  s["consecutive_losses"] < 2,
+
+            "low_dd": s["drawdown_pct"] < 4,
+            "good_wr": s["win_rate_recent"] > 55 or s["total_trades"] < 8,
+            "win_streak": s["consecutive_wins"] >= 2 or s["total_trades"] < 5,
+            "positive_day": s["daily_pnl"] >= 0,
+            "sentiment_ok": 18 <= s["fear_greed"] <= 80,
+            "funding_ok": abs(s["funding_avg"]) < 0.1,
+            "ls_ok": 0.6 < s["ls_ratio"] < 2.2,
+            "no_losses": s["consecutive_losses"] < 3,
         }
 
-        all_pass = all(aggro_checks.values())
-        if all_pass:
-            logger.debug(f"[REGIME] AGGRO — tutti i check passati")
+        passed = sum(aggro_checks.values())
+
+        if passed >= 6:
+            logger.debug(f"[REGIME] AGGRO score {passed}/8")
             return "aggro"
 
-        failed = [k for k, v in aggro_checks.items() if not v]
-        if len(failed) <= 2:
-            logger.debug(f"[REGIME] NORMAL (quasi AGGRO, mancano: {', '.join(failed)})")
-
-        # ══════════ NORMAL — default ══════════════════════════════════════
         return "normal"
 
-    # ─── Apply ───────────────────────────────────────────────────────────────
+    # ============================================================
+    # APPLY
+    # ============================================================
 
-    def _apply_regime(self, bot, regime: str, signals: dict):
-        """Scrive i parametri del regime sul DB via settings.set_many()."""
+    def _apply_regime(self, bot, regime, signals):
+
         try:
+
             from trading_bot.config import settings
 
             cfg = REGIME_CONFIGS[regime]["config"]
+
             changed = settings.set_many(cfg)
 
             label = REGIME_CONFIGS[regime]["label"]
+
             logger.info(
-                f"[REGIME] {label} applicato — {len(changed)} parametri modificati"
+                f"[REGIME] {label} applicato ({len(changed)} parametri)"
             )
 
-            # Notifica Telegram
             try:
+
                 bot.notifier.send(
-                    f"⚡ <b>REGIME AUTO-SWITCH</b>\n"
-                    f"Nuova strategia: <b>{label}</b>\n"
-                    f"Motivo: {self._explain(signals, regime)}\n"
-                    f"Parametri modificati: {len(changed)}\n"
-                    f"F&G={signals.get('fear_greed', '?')} | "
-                    f"DD={signals.get('drawdown_pct', 0):.1f}% | "
-                    f"WR={signals.get('win_rate_recent', 0):.0f}% | "
-                    f"Daily={signals.get('daily_pnl', 0):+.1f}%"
+                    f"⚡ <b>REGIME AUTO</b>\n"
+                    f"{label}\n"
+                    f"DD {signals.get('drawdown_pct',0):.1f}% "
+                    f"WR {signals.get('win_rate_recent',0):.0f}% "
+                    f"F&G {signals.get('fear_greed',0)}"
                 )
+
             except Exception:
                 pass
 
         except Exception as e:
-            logger.error(f"[REGIME] Errore applicazione {regime}: {e}")
-
-    def _explain(self, s: dict, regime: str) -> str:
-        """Genera una spiegazione leggibile del cambio regime."""
-        if regime == "safe":
-            reasons = []
-            if s["drawdown_pct"] > 12:     reasons.append(f"DD={s['drawdown_pct']:.1f}%")
-            if s["daily_pnl"] < -8:        reasons.append(f"daily={s['daily_pnl']:.1f}%")
-            if s["win_rate_recent"] < 35:   reasons.append(f"WR={s['win_rate_recent']:.0f}%")
-            if s["consecutive_losses"] >= 4: reasons.append(f"streak L{s['consecutive_losses']}")
-            if s["fear_greed"] < 10:        reasons.append(f"F&G={s['fear_greed']}")
-            if s["fear_greed"] > 90:        reasons.append(f"F&G={s['fear_greed']}")
-            return "Protezione: " + ", ".join(reasons) if reasons else "Segnali negativi"
-        elif regime == "aggro":
-            return (
-                f"Condizioni ottimali: DD={s['drawdown_pct']:.1f}% "
-                f"WR={s['win_rate_recent']:.0f}% W{s['consecutive_wins']} "
-                f"daily={s['daily_pnl']:+.1f}% F&G={s['fear_greed']}"
-            )
-        return "Condizioni normali"
+            logger.error(f"[REGIME] apply error {e}")
