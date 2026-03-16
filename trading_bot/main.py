@@ -223,7 +223,9 @@ class TradingBot:
     def _setup_scheduler(self):
 
         schedule.every(1).minutes.do(self._scan_swing_if_candle_closed)
+    if settings.ENABLE_SCALPING:
         schedule.every(45).seconds.do(self._scan_scalping)
+    
         schedule.every(3).minutes.do(self._scan_emerging)
         schedule.every(30).seconds.do(self._monitor_positions)
         schedule.every(5).minutes.do(self._check_regime)
