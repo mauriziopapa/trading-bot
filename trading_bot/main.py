@@ -1,5 +1,5 @@
 """
-Bitget Trading Bot — Main Orchestrator v7.3
+Bitget Trading Bot — Main Orchestrator v7.4
 Stable + Dashboard + Emerging Momentum Trading
 """
 
@@ -131,7 +131,7 @@ class TradingBot:
         _setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v7.3")
+        logger.info("BITGET TRADING BOT v7.4")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -170,9 +170,9 @@ class TradingBot:
             try:
                 schedule.run_pending()
             except Exception as e:
-                logger.error(f"[MAIN LOOP] {e}")
+                logger.error(f"[SCHEDULER] {e}")
 
-            time.sleep(2)
+            time.sleep(1)
 
 
 # --------------------------------------------------
@@ -223,10 +223,10 @@ class TradingBot:
     def _setup_scheduler(self):
 
         schedule.every(1).minutes.do(self._scan_swing_if_candle_closed)
-        
+
         if settings.ENABLE_SCALPING:
             schedule.every(45).seconds.do(self._scan_scalping)
-    
+
         schedule.every(3).minutes.do(self._scan_emerging)
         schedule.every(30).seconds.do(self._monitor_positions)
         schedule.every(5).minutes.do(self._check_regime)
@@ -275,7 +275,9 @@ class TradingBot:
         if not strategies:
             return
 
-        symbols = [f"{c['symbol']}/USDT" for c in self._emerging.scan()[:10]]
+        coins = self._emerging.scan() or []
+
+        symbols = [f"{c['symbol']}/USDT" for c in coins[:10] if "symbol" in c]
 
         if not symbols:
             symbols = settings.SPOT_SYMBOLS[:10]
@@ -319,121 +321,6 @@ class TradingBot:
 
 
 # --------------------------------------------------
-# SWING SCAN
-# --------------------------------------------------
-
-    def _scan_swing_if_candle_closed(self):
-
-        now = datetime.now(timezone.utc)
-
-        if now.minute % 15 == 0 and now.second < 5:
-
-            time.sleep(2)
-            self._scan_swing()
-
-
-    def _scan_swing(self):
-
-        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
-
-        if not strategies:
-            return
-
-        for symbol in settings.SPOT_SYMBOLS[:20]:
-
-            try:
-
-                df = ohlcv_to_df(
-                    self.exchange.fetch_ohlcv(
-                        symbol,
-                        settings.TF_SWING,
-                        300,
-                        "spot"
-                    )
-                )
-
-                for strat in strategies:
-
-                    signal = strat.analyze(df, symbol, "spot")
-
-                    if signal:
-
-                        logger.info(f"[SWING SIGNAL] {symbol}")
-
-                        self._track_signal(signal)
-                        self._process_signal(signal)
-
-            except Exception as e:
-                logger.debug(f"[SWING] {symbol} {e}")
-
-
-# --------------------------------------------------
-# EMERGING
-# --------------------------------------------------
-
-    def _scan_emerging(self):
-
-        try:
-
-            coins = self._emerging.scan()
-
-            if not coins:
-                return
-
-            coins = sorted(coins, key=lambda x: x.get("score", 0), reverse=True)
-
-            top = coins[:5]
-
-            logger.info(f"[EMERGING] top {[c['symbol'] for c in top]}")
-
-            for coin in top:
-
-                symbol = f"{coin['symbol'].upper()}/USDT"
-
-                if symbol not in settings.SPOT_SYMBOLS:
-                    continue
-
-                df = ohlcv_to_df(
-                    self.exchange.fetch_ohlcv(
-                        symbol,
-                        settings.TF_SCALP,
-                        150,
-                        "spot"
-                    )
-                )
-
-                for strat in self.strategies:
-
-                    signal = strat.analyze(df, symbol, "spot")
-
-                    if signal:
-
-                        logger.info(f"[EMERGING SIGNAL] {symbol}")
-
-                        self._track_signal(signal)
-                        self._process_signal(signal)
-
-        except Exception as e:
-            logger.error(f"[EMERGING] {e}")
-
-
-# --------------------------------------------------
-# SIGNAL TRACK
-# --------------------------------------------------
-
-    def _track_signal(self, signal):
-
-        self._recent_signals.append({
-            "symbol": signal.symbol,
-            "side": signal.side,
-            "strategy": signal.strategy,
-            "confidence": signal.confidence
-        })
-
-        self._recent_signals = self._recent_signals[-50:]
-
-
-# --------------------------------------------------
 # PROCESS SIGNAL
 # --------------------------------------------------
 
@@ -472,122 +359,90 @@ class TradingBot:
 # EXECUTE TRADE
 # --------------------------------------------------
 
-def _execute_signal(self, signal):
+    def _execute_signal(self, signal):
 
-    try:
+        try:
 
-        balance = self.exchange.get_usdt_balance(signal.market) or 0
+            balance = self.exchange.get_usdt_balance(signal.market) or 0
 
-        if balance < 5:
-            logger.warning("[TRADE] balance too low")
-            return
+            if balance < 5:
+                logger.warning("[TRADE] balance too low")
+                return
 
-        # --------------------------------------------------
-        # SAFETY BUFFER (fee + slippage)
-        # --------------------------------------------------
+            balance_safe = balance * 0.92
 
-        balance_safe = balance * 0.92
-
-        # --------------------------------------------------
-        # POSITION SIZE
-        # --------------------------------------------------
-
-        size = self.risk.position_size(
-            balance_safe,
-            signal.entry,
-            signal.stop_loss,
-            signal.atr,
-            signal.market,
-            symbol=signal.symbol
-        )
-
-        if size <= 0:
-            logger.warning("[TRADE] size=0")
-            return
-
-        # --------------------------------------------------
-        # CAPITAL CHECK
-        # --------------------------------------------------
-
-        trade_value = size * signal.entry
-
-        if trade_value > balance_safe:
-
-            logger.warning(
-                f"[TRADE] resize {signal.symbol} "
-                f"value={trade_value:.2f} balance={balance_safe:.2f}"
+            size = self.risk.position_size(
+                balance_safe,
+                signal.entry,
+                signal.stop_loss,
+                signal.atr,
+                signal.market,
+                symbol=signal.symbol
             )
 
-            size = balance_safe / signal.entry
+            if size <= 0:
+                return
+
             trade_value = size * signal.entry
 
-        # --------------------------------------------------
-        # MIN ORDER CHECK
-        # --------------------------------------------------
+            if trade_value > balance_safe:
+                size = balance_safe / signal.entry
+                trade_value = size * signal.entry
 
-        if trade_value < 5:
-            logger.warning(f"[TRADE] too small {signal.symbol}")
-            return
+            if trade_value < 5:
+                logger.warning(f"[TRADE] too small {signal.symbol}")
+                return
 
-        # --------------------------------------------------
-        # EXECUTE ORDER
-        # --------------------------------------------------
+            order = self.exchange.create_market_order(
+                signal.symbol,
+                signal.side,
+                size,
+                signal.market
+            )
 
-        order = self.exchange.create_market_order(
-            signal.symbol,
-            signal.side,
-            size,
-            signal.market
-        )
+            if not order or not order.get("id"):
+                logger.error(f"[TRADE] order failed {signal.symbol}")
+                return
 
-        if not order or not order.get("id"):
+            trade_data = {
 
-            logger.error(f"[TRADE] order failed {signal.symbol}")
-            return
+                "order_id": order.get("id"),
+                "side": signal.side,
+                "entry": signal.entry,
+                "size": size,
+                "stop_loss": signal.stop_loss,
+                "take_profit": signal.take_profit,
+                "atr": signal.atr
 
-        trade_data = {
+            }
 
-            "order_id": order.get("id"),
-            "side": signal.side,
-            "entry": signal.entry,
-            "size": size,
-            "stop_loss": signal.stop_loss,
-            "take_profit": signal.take_profit,
-            "atr": signal.atr
+            self.risk.register_open(
+                signal.symbol,
+                trade_data,
+                signal.market
+            )
 
-        }
+            self.notifier.trade_opened(
+                symbol=signal.symbol,
+                side=signal.side,
+                size=size,
+                entry=signal.entry,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                market=signal.market,
+                strategy=signal.strategy,
+                confidence=signal.confidence
+            )
 
-        self.risk.register_open(
-            signal.symbol,
-            trade_data,
-            signal.market
-        )
+            logger.info(
+                f"[TRADE] OPEN {signal.symbol} "
+                f"value={trade_value:.2f}"
+            )
 
-        self.notifier.trade_opened(
-            symbol=signal.symbol,
-            side=signal.side,
-            size=size,
-            entry=signal.entry,
-            stop_loss=signal.stop_loss,
-            take_profit=signal.take_profit,
-            market=signal.market,
-            strategy=signal.strategy,
-            confidence=signal.confidence
-        )
+        except Exception as e:
 
-        logger.info(
-            f"[TRADE] OPEN {signal.symbol} "
-            f"value={trade_value:.2f} size={size}"
-        )
+            logger.error(f"[TRADE] {signal.symbol} {e}")
 
-    except Exception as e:
-
-        logger.error(f"[TRADE] {signal.symbol} {e}")
-
-
-# --------------------------------------------------
-# MONITOR POSITIONS
-# --------------------------------------------------
 
 # --------------------------------------------------
 # MONITOR POSITIONS
@@ -595,7 +450,7 @@ def _execute_signal(self, signal):
 
     def _monitor_positions(self):
 
-        trades = self.risk.all_open_trades()
+        trades = self.risk.all_open_trades() or []
 
         for trade in trades:
 
@@ -627,7 +482,11 @@ def _execute_signal(self, signal):
 
             side = "sell" if trade["side"] == "buy" else "buy"
 
-            self.exchange.create_market_order(symbol, side, trade["size"], market)
+            order = self.exchange.create_market_order(symbol, side, trade["size"], market)
+
+            if not order:
+                logger.error(f"[CLOSE] order failed {symbol}")
+                return
 
             entry = trade["entry"]
 
