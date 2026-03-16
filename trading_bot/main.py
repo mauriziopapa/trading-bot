@@ -319,6 +319,59 @@ class TradingBot:
 
                 logger.error(f"[SCALPING] {symbol} {e}")
 
+# --------------------------------------------------
+# SWING SCAN
+# --------------------------------------------------
+
+    def _scan_swing_if_candle_closed(self):
+
+        now = datetime.now(timezone.utc)
+
+        # esegue solo alla chiusura candle 15m
+        if now.minute % 15 == 0 and now.second < 5:
+
+            time.sleep(2)
+
+            self._scan_swing()
+
+
+    def _scan_swing(self):
+
+        strategies = [s for s in self.strategies if s.NAME in ("RSI_MACD", "BOLLINGER")]
+
+        if not strategies:
+            return
+
+        for symbol in settings.SPOT_SYMBOLS[:20]:
+
+            try:
+
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol,
+                    settings.TF_SWING,
+                    300,
+                    "spot"
+                )
+
+                if not ohlcv:
+                    continue
+
+                df = ohlcv_to_df(ohlcv)
+
+                for strat in strategies:
+
+                    signal = strat.analyze(df, symbol, "spot")
+
+                    if signal:
+
+                        logger.info(f"[SWING SIGNAL] {symbol}")
+
+                        self._track_signal(signal)
+                        self._process_signal(signal)
+
+            except Exception as e:
+
+                logger.debug(f"[SWING] {symbol} {e}")
 
 # --------------------------------------------------
 # PROCESS SIGNAL
