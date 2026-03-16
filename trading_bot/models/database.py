@@ -167,3 +167,56 @@ class DB:
         except Exception as e:
             logger.error(f"DB get_stats: {e}")
             return {}
+# ==========================================================
+# RECOVER OPEN TRADES
+# ==========================================================
+
+    def get_open_trades(self):
+
+        """
+        Restituisce i trade ancora aperti nel formato atteso dal RiskManager.
+        """
+
+        if not self.enabled:
+            return []
+
+        try:
+
+            with Session(self.engine) as s:
+
+                trades = (
+                    s.query(Trade)
+                    .filter(Trade.status == "open")
+                    .all()
+                )
+
+                out = []
+
+                for t in trades:
+
+                    out.append({
+
+                        "order_id": t.order_id,
+                        "symbol": t.symbol,
+                        "market": t.market,
+                        "side": t.side,
+
+                        "entry": t.entry_price,
+                        "size": t.size,
+
+                        "stop_loss": t.stop_loss,
+                        "take_profit": t.take_profit,
+
+                        "atr": t.atr or 0
+
+                    })
+
+                logger.info(f"[DB] recovered {len(out)} open trades")
+
+                return out
+
+        except Exception as e:
+
+            logger.error(f"DB get_open_trades: {e}")
+
+            return []
