@@ -430,7 +430,7 @@ class TradingBot:
 
                 if symbol not in settings.SPOT_SYMBOLS:
 
-                    logger.debug(f"[EMERGING] skip {symbol} not in whitelist")
+                    logger.info(f"[EMERGING] skip {symbol} not in whitelist")
 
                     continue
 
