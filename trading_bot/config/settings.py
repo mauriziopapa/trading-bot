@@ -337,7 +337,7 @@ class DynamicSettings:
     @property
     def DATABASE_URL(self)     -> str:  return os.getenv("DATABASE_URL", "")
     @property
-    def LOG_LEVEL(self)        -> str:  return os.getenv("LOG_LEVEL", "INFO")
+    def LOG_LEVEL(self)        -> str:  return os.getenv("LOG_LEVEL", "DEBUG")
     @property
     def ENABLE_DASHBOARD(self) -> bool: return os.getenv("ENABLE_DASHBOARD", "true").lower() in ("true","1","yes")
     @property
