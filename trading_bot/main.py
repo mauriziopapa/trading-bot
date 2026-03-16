@@ -270,7 +270,12 @@ class TradingBot:
         if not strategies:
             return
 
-        for symbol in settings.SPOT_SYMBOLS[:15]:
+        symbols = [f"{c['symbol']}/USDT" for c in self._emerging.scan()[:10]]
+
+        if not symbols:
+            symbols = settings.SPOT_SYMBOLS[:10]
+
+        for symbol in symbols:
 
             try:
 
