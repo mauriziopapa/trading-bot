@@ -139,7 +139,7 @@ class TradingBot:
 
         self.exchange.initialize()
         self.db.connect()
-
+        self.risk.db = self.db
         self.risk.recover_from_db()
 
         self._sync_balance()

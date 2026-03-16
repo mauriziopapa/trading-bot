@@ -70,10 +70,10 @@ class EmergingScanner:
         if not force and (now - self._last_scan_ts) < self._scan_ttl:
             return self._last_scan
 
-        min_vol = _cfg("EM_MIN_VOLUME_USD", 1_000_000)
-        min_chg = _cfg("EM_MIN_CHANGE_24H", 2)
-        min_surge = _cfg("EM_MIN_VOLUME_SURGE", 1.2)
-        max_results = _cfg("EM_MAX_RESULTS", 10)
+        min_vol = _cfg("EM_MIN_VOLUME_USD", 500_000)
+        min_chg = _cfg("EM_MIN_CHANGE_24H", 1)
+        min_surge = _cfg("EM_MIN_VOLUME_SURGE", 1.1)
+        max_results = _cfg("EM_MAX_RESULTS", 20)
 
         logger.info(
             f"[EMERGING v4] Scan — vol≥${min_vol/1e6:.0f}M "
@@ -452,7 +452,7 @@ class EmergingScanner:
 
         mom = min(30, max(0, chg))
 
-        vol_pt = min(18, vol / 10000000)
+        vol_pt = min(18, vol / 5000000)
 
         sur_pt = min(18, surge * 3)
 
