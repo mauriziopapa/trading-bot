@@ -84,6 +84,54 @@ class RiskManager:
             logger.error(f"[RISK] position_size error {e}")
             return 0
 
+# ==========================================================
+# RECOVER OPEN TRADES FROM DB
+# ==========================================================
+
+    def recover_from_db(self):
+
+        """
+        Ripristina eventuali trade aperti dal database
+        quando il bot viene riavviato.
+        """
+
+        try:
+
+            if not hasattr(self, "db"):
+                logger.info("[RISK] DB non collegato — skip recovery")
+                return
+
+            trades = self.db.get_open_trades()
+
+            if not trades:
+                logger.info("[RISK] recovered 0 open trades")
+                return
+
+            for t in trades:
+
+                symbol = t.get("symbol")
+                market = t.get("market", "spot")
+
+                trade_data = {
+                    "order_id": t.get("order_id"),
+                    "side": t.get("side"),
+                    "entry": float(t.get("entry")),
+                    "size": float(t.get("size")),
+                    "stop_loss": float(t.get("stop_loss")),
+                    "take_profit": float(t.get("take_profit")),
+                    "atr": float(t.get("atr", 0))
+                }
+
+                if market == "spot":
+                    self.open_spot[symbol] = trade_data
+                else:
+                    self.open_futures[symbol] = trade_data
+
+            logger.info(f"[RISK] recovered {len(trades)} open trades")
+
+        except Exception as e:
+
+            logger.error(f"[RISK] recover_from_db error {e}")
 
 # ==========================================================
 # LEVERAGE
