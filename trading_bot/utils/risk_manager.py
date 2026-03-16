@@ -246,7 +246,42 @@ class RiskManager:
             trades.append(trade)
 
         return trades
+# ==========================================================
+# OPEN SHOULD CLOSE
+# ==========================================================
 
+
+    def should_close(self, trade, price):
+
+        try:
+
+            entry = float(trade["entry"])
+            stop = float(trade["stop_loss"])
+            tp = float(trade["take_profit"])
+            side = trade["side"]
+
+            # LONG
+            if side == "buy":
+
+                if price <= stop:
+                    return True, "stop_loss"
+
+                if price >= tp:
+                    return True, "take_profit"
+
+            # SHORT
+            else:
+
+                if price >= stop:
+                    return True, "stop_loss"
+
+                if price <= tp:
+                    return True, "take_profit"
+
+            return False, None
+
+        except Exception:
+            return False, None
 
 # ==========================================================
 # STATS

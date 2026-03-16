@@ -589,6 +589,10 @@ def _execute_signal(self, signal):
 # MONITOR POSITIONS
 # --------------------------------------------------
 
+# --------------------------------------------------
+# MONITOR POSITIONS
+# --------------------------------------------------
+
     def _monitor_positions(self):
 
         trades = self.risk.all_open_trades()
