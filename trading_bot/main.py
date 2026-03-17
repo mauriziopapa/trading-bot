@@ -27,6 +27,7 @@ from trading_bot.strategies.scalping import ScalpingStrategy
 
 from trading_bot.utils.emerging_scanner import EmergingScanner
 from trading_bot.utils.regime_detector import RegimeDetector
+from trading_bot.utils.sentiment_analyzer import SentimentAnalyzer
 
 
 # ==========================================================
@@ -69,8 +70,12 @@ class TradingBot:
 
         self._emerging = EmergingScanner()
         self._regime = RegimeDetector()
+        self._sentiment = SentimentAnalyzer()
 
         self._recent_logs = []
+        self._recent_signals = []
+        self.active_strategy = "AUTO"
+        self.sentiment = {}
         self._running = True
 
         self.strategies = [
@@ -129,11 +134,41 @@ class TradingBot:
             "logs/bot.log",
             rotation="20 MB",
             retention="10 days",
-            level="INFO"
+            level="DEBUG"
         )
 
         logger.add(lambda msg: print(msg, end=""))
 
+        def _dash_log(msg):
+
+            self._recent_logs.append({
+                "ts": msg.record["time"].isoformat(),
+                "level": msg.record["level"].name,
+                "msg": msg.record["message"]
+            })
+
+            self._recent_logs = self._recent_logs[-200:]
+
+        logger.add(_dash_log, level="INFO")
+
+
+    def _track_signal(self, signal):
+
+        self._recent_signals.append({
+            "symbol": signal.symbol,
+            "side": signal.side,
+            "strategy": signal.strategy,
+            "confidence": signal.confidence
+        })
+
+        self._recent_signals = self._recent_signals[-50:]
+
+    def _update_sentiment(self):
+
+        try:
+            self.sentiment = self._sentiment.get_market_sentiment()
+        except Exception:
+            self.sentiment = {}
 
 # ==========================================================
 # DASHBOARD
@@ -171,6 +206,20 @@ class TradingBot:
             pass
 
 
+    def _update_strategy_state(self):
+
+        try:
+
+            if settings.ENABLE_SCALPING:
+                self.active_strategy = "Blitz"
+            elif settings.ENABLE_BREAKOUT:
+                self.active_strategy = "Sniper"
+            else:
+                self.active_strategy = "AUTO"
+
+        except:
+            self.active_strategy = "AUTO"
+
 # ==========================================================
 # NOTIFY STARTUP
 # ==========================================================
@@ -201,7 +250,9 @@ class TradingBot:
         schedule.every(45).seconds.do(self._scan_scalping)
         schedule.every(3).minutes.do(self._scan_emerging)
         schedule.every(30).seconds.do(self._monitor_positions)
-        schedule.every(5).minutes.do(self._check_regime)
+        schedule.every(4).minutes.do(self._check_regime)
+        schedule.every(2).minutes.do(self._update_sentiment)
+        schedule.every(30).seconds.do(self._update_strategy_state)
 
         if DASHBOARD_ENABLED:
             schedule.every(15).seconds.do(self._update_dashboard)
@@ -237,6 +288,9 @@ class TradingBot:
 
                     if signal:
                         logger.info(f"[SCALP SIGNAL] {symbol}")
+
+                        self._track_signal(signal)   
+
                         self._execute_signal(signal)
 
         except Exception as e:
@@ -270,6 +324,9 @@ class TradingBot:
 
                     if signal:
                         logger.info(f"[EMERGING SIGNAL] {symbol}")
+
+                        self._track_signal(signal)
+
                         self._execute_signal(signal)
 
         except Exception as e:
