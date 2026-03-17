@@ -1,13 +1,26 @@
 """
-Risk Manager v7.4
-Stable production version
-Compatible with regime_detector
+Risk Manager v7.5
+Production hardened version
+Safe against None / bad signals / execution errors
 """
 
 import time
 import threading
 from loguru import logger
 from trading_bot.config import settings
+
+
+# ==========================================================
+# SAFE FLOAT
+# ==========================================================
+
+def safe_float(x, default=0.0):
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except Exception:
+        return default
 
 
 class RiskManager:
@@ -35,7 +48,7 @@ class RiskManager:
 
 
 # ==========================================================
-# BALANCE ACCESS (FIX regime detector)
+# BALANCE
 # ==========================================================
 
     @property
@@ -48,6 +61,8 @@ class RiskManager:
 
 
     def update_balance(self, balance):
+
+        balance = safe_float(balance)
 
         self._estimated_balance = balance
 
@@ -65,6 +80,8 @@ class RiskManager:
     def drawdown_exceeded(self, balance):
 
         try:
+
+            balance = safe_float(balance)
 
             if self.peak_balance <= 0:
                 self.peak_balance = balance
@@ -84,31 +101,43 @@ class RiskManager:
 
 
 # ==========================================================
-# POSITION SIZE
+# POSITION SIZE (HARDENED)
 # ==========================================================
 
     def position_size(self, balance, entry, stop_loss, atr=None, market="spot", symbol=""):
 
         try:
 
-            if entry <= 0:
+            balance = safe_float(balance)
+            entry = safe_float(entry)
+            stop_loss = safe_float(stop_loss)
+            atr = safe_float(atr)
+
+            if balance <= 0 or entry <= 0:
                 return 0
 
-            risk_pct = settings.MAX_RISK_PCT / 100
+            # fallback stop_loss se mancante
+            if stop_loss <= 0 or stop_loss == entry:
+                stop_loss = entry * 0.98 if entry > 0 else entry
+
+            risk_pct = safe_float(settings.MAX_RISK_PCT) / 100
             risk_amount = balance * risk_pct
 
             risk_per_unit = abs(entry - stop_loss)
 
+            # fallback se troppo piccolo
             if risk_per_unit <= 0:
-                return 0
+                risk_per_unit = entry * 0.01
 
             size = risk_amount / risk_per_unit
 
-            max_notional = balance * (settings.MAX_NOTIONAL_PCT / 100)
+            # cap notional
+            max_notional = balance * (safe_float(settings.MAX_NOTIONAL_PCT) / 100)
 
             if size * entry > max_notional:
                 size = max_notional / entry
 
+            # minimum trade size
             min_notional = 5
 
             if size * entry < min_notional:
@@ -123,7 +152,7 @@ class RiskManager:
 
 
 # ==========================================================
-# RECOVER OPEN TRADES
+# RECOVERY
 # ==========================================================
 
     def recover_from_db(self):
@@ -151,11 +180,11 @@ class RiskManager:
 
                     "order_id": t.get("order_id"),
                     "side": t.get("side"),
-                    "entry": float(t.get("entry")),
-                    "size": float(t.get("size")),
-                    "stop_loss": float(t.get("stop_loss")),
-                    "take_profit": float(t.get("take_profit")),
-                    "atr": float(t.get("atr", 0))
+                    "entry": safe_float(t.get("entry")),
+                    "size": safe_float(t.get("size")),
+                    "stop_loss": safe_float(t.get("stop_loss")),
+                    "take_profit": safe_float(t.get("take_profit")),
+                    "atr": safe_float(t.get("atr"))
                 }
 
                 if market == "spot":
@@ -178,19 +207,22 @@ class RiskManager:
 
         try:
 
+            atr = safe_float(atr)
+            entry = safe_float(entry)
+
             if atr <= 0 or entry <= 0:
                 return settings.DEFAULT_LEVERAGE
 
             vol = atr / entry
 
             if vol < 0.01:
-                return 15
-
-            if vol < 0.02:
                 return 10
 
+            if vol < 0.02:
+                return 8
+
             if vol < 0.04:
-                return 7
+                return 6
 
             return 5
 
@@ -243,6 +275,8 @@ class RiskManager:
 
         try:
 
+            pnl_pct = safe_float(pnl_pct)
+
             if pnl_pct > 0:
                 self.wins += 1
             else:
@@ -291,32 +325,37 @@ class RiskManager:
 
 
 # ==========================================================
-# CLOSE CONDITIONS
+# CLOSE CONDITIONS (SAFE)
 # ==========================================================
 
     def should_close(self, trade, price):
 
         try:
 
-            entry = float(trade["entry"])
-            stop = float(trade["stop_loss"])
-            tp = float(trade["take_profit"])
-            side = trade["side"]
+            entry = safe_float(trade.get("entry"))
+            stop = safe_float(trade.get("stop_loss"))
+            tp = safe_float(trade.get("take_profit"))
+            price = safe_float(price)
+
+            side = trade.get("side")
+
+            if entry <= 0 or price <= 0:
+                return False, None
 
             if side == "buy":
 
-                if price <= stop:
+                if stop > 0 and price <= stop:
                     return True, "stop_loss"
 
-                if price >= tp:
+                if tp > 0 and price >= tp:
                     return True, "take_profit"
 
             else:
 
-                if price >= stop:
+                if stop > 0 and price >= stop:
                     return True, "stop_loss"
 
-                if price <= tp:
+                if tp > 0 and price <= tp:
                     return True, "take_profit"
 
             return False, None
@@ -334,7 +373,6 @@ class RiskManager:
     def stats(self):
 
         return {
-
             "open_trades": len(self.open_spot) + len(self.open_futures),
             "wins": self.wins,
             "losses": self.losses
@@ -358,13 +396,11 @@ class RiskManager:
                 }
 
             trades = len(self._recent_pnls)
-
             wins = len([p for p in self._recent_pnls if p > 0])
 
             avg = sum(self._recent_pnls) / trades
 
             return {
-
                 "avg_pnl": avg,
                 "win_rate": wins / trades,
                 "trades": trades
@@ -375,7 +411,6 @@ class RiskManager:
             logger.error(f"[RISK] recent_stats error {e}")
 
             return {
-
                 "avg_pnl": 0,
                 "win_rate": 0,
                 "trades": 0

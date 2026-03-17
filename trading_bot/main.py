@@ -29,6 +29,15 @@ from trading_bot.utils.emerging_scanner import EmergingScanner
 from trading_bot.utils.regime_detector import RegimeDetector
 
 
+def safe_float(x, default=0.0):
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+
 # --------------------------------------------------
 # DASHBOARD
 # --------------------------------------------------
@@ -506,168 +515,161 @@ class TradingBot:
 # EXECUTE TRADE
 # --------------------------------------------------
 
-    def _execute_signal(self, signal):
+def _execute_signal(self, signal):
+
+    try:
+
+        symbol = signal.symbol
+        side = signal.side
+
+        # ---------------------------------------
+        # MARKET ROUTING
+        # ---------------------------------------
+
+        market = "futures"
+        if signal.side == "buy" and signal.market == "spot":
+            market = "spot"
+
+        # ---------------------------------------
+        # FETCH LIVE PRICE (CRITICO FIX)
+        # ---------------------------------------
+
+        ticker = self.exchange.fetch_ticker(symbol, market)
+
+        if not ticker:
+            logger.error(f"[TRADE] {symbol} no ticker")
+            return
+
+        price = safe_float(ticker.get("last") or ticker.get("close"))
+
+        if price <= 0:
+            logger.error(f"[TRADE] {symbol} invalid price")
+            return
+
+        # ---------------------------------------
+        # BALANCE
+        # ---------------------------------------
+
+        balance = safe_float(self.exchange.get_usdt_balance(market))
+
+        if balance < 5:
+            logger.warning("[TRADE] balance too low")
+            return
+
+        balance_safe = balance * 0.92
+
+        # ---------------------------------------
+        # SAFE SIGNAL VALUES
+        # ---------------------------------------
+
+        entry = safe_float(signal.entry, price)
+        stop_loss = safe_float(signal.stop_loss, price * 0.98)
+        atr = safe_float(signal.atr, price * 0.01)
+
+        # ---------------------------------------
+        # POSITION SIZE (SAFE)
+        # ---------------------------------------
 
         try:
-
-            # ---------------------------------------
-            # MARKET ROUTING (prefer futures)
-            # ---------------------------------------
-
-            market = "futures"
-
-            # allow spot long if strategy explicitly requests it
-            if signal.side == "buy" and signal.market == "spot":
-                market = "spot"
-
-            symbol = signal.symbol
-            side = signal.side
-
-            # ---------------------------------------
-            # BALANCE CHECK
-            # ---------------------------------------
-
-            balance = self.exchange.get_usdt_balance(market) or 0
-
-            if balance < 5:
-                logger.warning("[TRADE] balance too low")
-                return
-
-            # keep safety buffer
-            balance_safe = balance * 0.92
-
-            # ---------------------------------------
-            # POSITION SIZE
-            # ---------------------------------------
-
             size = self.risk.position_size(
                 balance_safe,
-                signal.entry,
-                signal.stop_loss,
-                signal.atr,
+                entry,
+                stop_loss,
+                atr,
                 market,
                 symbol=symbol
             )
+        except Exception:
+            size = balance_safe / price * 0.1  # fallback
 
-            if size <= 0:
-                logger.debug(f"[TRADE] size zero {symbol}")
-                return
+        size = safe_float(size)
 
-            trade_value = size * signal.entry
+        if size <= 0:
+            logger.debug(f"[TRADE] size zero {symbol}")
+            return
 
-            # cap by balance
-            if trade_value > balance_safe:
-                size = balance_safe / signal.entry
-                trade_value = size * signal.entry
+        trade_value = size * price
 
-            # minimum order size protection
-            if trade_value < 5:
-                logger.warning(f"[TRADE] too small {symbol}")
-                return
+        if trade_value > balance_safe:
+            size = balance_safe / price
 
-            # ---------------------------------------
-            # SPOT SHORT PROTECTION
-            # ---------------------------------------
+        if trade_value < 5:
+            logger.warning(f"[TRADE] too small {symbol}")
+            return
 
-            if market == "spot" and side == "sell":
+        # ---------------------------------------
+        # EXECUTE ORDER
+        # ---------------------------------------
 
-                bal = self.exchange.fetch_balance("spot")
-                base = symbol.split("/")[0]
+        params = {}
 
-                if float(bal.get(base, {}).get("free", 0)) <= 0:
-                    logger.warning(f"[TRADE] skip sell {symbol} no asset")
-                    return
+        if market == "futures":
+            params["reduceOnly"] = False
 
-            # ---------------------------------------
-            # EXECUTE ORDER
-            # ---------------------------------------
+        order = self.exchange.create_market_order(
+            symbol,
+            side,
+            size,
+            market,
+            params=params
+        )
 
-            params = {}
+        if not order or not order.get("id"):
+            logger.error(f"[TRADE] order failed {symbol}")
+            return
 
-            if market == "futures":
-                params["reduceOnly"] = False
+        filled = safe_float(order.get("filled"), size)
 
-            order = self.exchange.create_market_order(
-                symbol,
-                side,
-                size,
-                market,
-                params=params
-            )
+        # ---------------------------------------
+        # REGISTER TRADE
+        # ---------------------------------------
 
-            if not order or not order.get("id"):
-                logger.error(f"[TRADE] order failed {symbol}")
-                return
+        trade_data = {
+            "order_id": order.get("id"),
+            "side": side,
+            "entry": price,
+            "size": filled,
+            "stop_loss": stop_loss,
+            "take_profit": safe_float(signal.take_profit, price * 1.02),
+            "atr": atr
+        }
 
-            filled = float(order.get("filled", size))
+        self.risk.register_open(symbol, trade_data, market)
 
-            # ---------------------------------------
-            # REGISTER TRADE
-            # ---------------------------------------
-
-            trade_data = {
-                "order_id": order.get("id"),
+        try:
+            self.db.insert_trade({
+                "symbol": symbol,
+                "market": market,
                 "side": side,
-                "entry": signal.entry,
+                "entry": price,
                 "size": filled,
-                "stop_loss": signal.stop_loss,
-                "take_profit": signal.take_profit,
-                "atr": signal.atr
-            }
-
-            # register in memory
-            self.risk.register_open(
-                symbol,
-                trade_data,
-                market
-            )
-
-            # ---------------------------------------
-            # SAVE TO DATABASE
-            # ---------------------------------------
-
-            try:
-
-                self.db.insert_trade({
-                    "symbol": symbol,
-                    "market": market,
-                    "side": side,
-                    "entry": signal.entry,
-                    "size": filled,
-                    "stop_loss": signal.stop_loss,
-                    "take_profit": signal.take_profit,
-                    "order_id": order.get("id"),
-                    "status": "open",
-                    "created_at": int(time.time())
-                })
-
-            except Exception as e:
-                logger.error(f"[DB] save trade failed {e}")
-
-            # ---------------------------------------
-            # NOTIFICATION
-            # ---------------------------------------
-
-            self.notifier.trade_opened(
-                symbol=symbol,
-                side=side,
-                size=filled,
-                entry=signal.entry,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                market=market,
-                strategy=signal.strategy,
-                confidence=signal.confidence
-            )
-
-            logger.info(
-                f"[TRADE] OPEN {symbol} {side} "
-                f"value={trade_value:.2f} market={market}"
-            )
-
+                "stop_loss": stop_loss,
+                "take_profit": safe_float(signal.take_profit),
+                "order_id": order.get("id"),
+                "status": "open",
+                "created_at": int(time.time())
+            })
         except Exception as e:
+            logger.error(f"[DB] save trade failed {e}")
 
-            logger.error(f"[TRADE] {signal.symbol} {e}")
+        self.notifier.trade_opened(
+            symbol=symbol,
+            side=side,
+            size=filled,
+            entry=price,
+            stop_loss=stop_loss,
+            take_profit=safe_float(signal.take_profit),
+            market=market,
+            strategy=signal.strategy,
+            confidence=signal.confidence
+        )
+
+        logger.info(
+            f"[TRADE] OPEN {symbol} {side} value={trade_value:.2f}"
+        )
+
+    except Exception as e:
+        logger.error(f"[TRADE] {signal.symbol} {e}")
 
 
 # --------------------------------------------------
@@ -690,7 +692,9 @@ class TradingBot:
                 if not ticker:
                     continue
 
-                price = float(ticker["last"])
+                price = safe_float(ticker.get("last"))
+                if price <= 0:
+                    continue
 
                 if hasattr(self.risk, "should_close"):
                     close, reason = self.risk.should_close(trade, price)
@@ -716,7 +720,7 @@ class TradingBot:
 
             balance = self.exchange.fetch_balance(market)
             
-            asset_balance = float(balance.get(base, {}).get("free", 0))
+            asset_balance = safe_float(balance.get(base, {}).get("free", 0))
             
             if asset_balance <= 0:
                 logger.error(f"[CLOSE] no balance for {symbol}")
@@ -731,6 +735,13 @@ class TradingBot:
                 return
 
             entry = trade["entry"]
+
+            entry = safe_float(entry)
+            exit_price = safe_float(exit_price)
+
+            if entry <= 0:
+                logger.error(f"[CLOSE] invalid entry {symbol}")
+                return
 
             pnl_pct = ((exit_price - entry) / entry) * 100
 
