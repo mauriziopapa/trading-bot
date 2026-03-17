@@ -130,11 +130,9 @@ class TradingBot:
             self._start_dashboard()
 
         self.exchange.initialize()
-        self._recover_positions_from_exchange()
         self.db.connect()
-
         self.risk.db = self.db
-        self.risk.recover_from_db()
+        self._recover_positions_from_exchange()
 
         self._notify_startup()
         self._setup_scheduler()
@@ -261,6 +259,12 @@ class TradingBot:
                 logger.info(f"[RECOVERY] {symbol} restored from exchange")
 
             logger.info(f"[RECOVERY] {recovered} positions recovered from exchange")
+
+            # Sync DB: replace all open positions with exchange state
+            try:
+                self.db.replace_open_positions(self.risk.all_open_trades())
+            except Exception as db_err:
+                logger.error(f"[RECOVERY] DB sync failed: {db_err}")
 
         except Exception as e:
             logger.error(f"[RECOVERY] {e}")
@@ -536,6 +540,13 @@ class TradingBot:
                 return
 
             # ==================================================
+            # OPPOSITE POSITION GUARD — prevent both LONG+SHORT
+            # ==================================================
+            if self.risk.has_opposite_position(symbol, side):
+                logger.warning(f"[GUARD] {symbol} has opposite position — blocking new {side}")
+                return
+
+            # ==================================================
             # RESERVE SYMBOL — atomic lock to prevent race conditions
             # ==================================================
             if not self.risk.reserve_symbol(symbol):
@@ -614,6 +625,22 @@ class TradingBot:
                 self.last_trade_time[symbol] = time.time()
                 self._executed_signals[signal_id] = now
 
+                # Persist to DB
+                try:
+                    order_id = order.get("id", f"ord_{int(time.time())}_{symbol}")
+                    self.db.save_trade_open(
+                        order_id=order_id,
+                        symbol=symbol, market="futures", strategy=strategy,
+                        side=side, entry=price, size=size,
+                        stop_loss=trade["stop_loss"],
+                        take_profit=trade["take_profit"],
+                        confidence=getattr(signal, "confidence", 0.7),
+                        atr=0, notes="", timeframe="1m",
+                        leverage=leverage,
+                    )
+                except Exception as db_err:
+                    logger.warning(f"[DB] save_trade_open failed: {db_err}")
+
                 self.notifier.trade_opened(
                     symbol=symbol,
                     side=side,
@@ -649,8 +676,39 @@ class TradingBot:
             # ==================================================
 
             exchange_positions = self.exchange.fetch_positions()
-            active_symbols = {p.get("symbol") for p in exchange_positions}
 
+            # Sync runtime state from exchange (add missing, remove ghosts, update sizes)
+            sync_result = self.risk.sync_from_exchange(exchange_positions)
+            if sync_result["added"] or sync_result["removed"]:
+                logger.info(
+                    f"[SYNC] +{len(sync_result['added'])} added, "
+                    f"-{len(sync_result['removed'])} removed"
+                )
+                # Sync DB for ghost removals
+                for sym in sync_result["removed"]:
+                    try:
+                        self.db.close_position_by_symbol(sym, reason="ghost_sync")
+                    except Exception:
+                        pass
+                # Sync DB for newly discovered positions
+                for sym in sync_result["added"]:
+                    try:
+                        trade = self.risk.open_futures.get(sym, {})
+                        order_id = f"sync_{int(time.time())}_{sym.replace('/', '_')}"
+                        self.db.save_trade_open(
+                            order_id=order_id, symbol=sym, market="futures",
+                            strategy="exchange_sync", side=trade.get("side", "buy"),
+                            entry=safe_float(trade.get("entry")),
+                            size=safe_float(trade.get("size")),
+                            stop_loss=safe_float(trade.get("stop_loss")),
+                            take_profit=safe_float(trade.get("take_profit")),
+                            confidence=0, atr=0, notes="synced from exchange",
+                            timeframe="", leverage=getattr(settings, "DEFAULT_LEVERAGE", 10),
+                        )
+                    except Exception:
+                        pass
+
+            active_symbols = {p.get("symbol") for p in exchange_positions}
             open_trades = self.risk.all_open_trades()
 
             # --------------------------------------------------
@@ -822,6 +880,23 @@ class TradingBot:
                 return
 
             # ==================================================
+            # CLOSE VERIFICATION — confirm position is gone
+            # ==================================================
+
+            try:
+                time.sleep(0.5)
+                verify_positions = self.exchange.fetch_positions()
+                still_open = any(
+                    p.get("symbol") == symbol and safe_float(p.get("contracts")) > 0
+                    for p in verify_positions
+                )
+                if still_open:
+                    logger.error(f"[CLOSE VERIFY] {symbol} still open after close order — skipping state update")
+                    return
+            except Exception as ve:
+                logger.warning(f"[CLOSE VERIFY] verification failed: {ve} — proceeding")
+
+            # ==================================================
             # PNL
             # ==================================================
 
@@ -839,11 +914,13 @@ class TradingBot:
 
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
 
-            if hasattr(self.db, "update_trade_status"):
-                try:
-                    self.db.update_trade_status(symbol, "closed")
-                except:
-                    pass
+            try:
+                self.db.close_position_by_symbol(
+                    symbol=symbol, exit_price=price,
+                    pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
+                )
+            except Exception as db_err:
+                logger.warning(f"[DB] close_position_by_symbol failed: {db_err}")
 
             self.notifier.trade_closed(
                 symbol=symbol,

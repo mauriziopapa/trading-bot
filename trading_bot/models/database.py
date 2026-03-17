@@ -1,10 +1,12 @@
 """
 Database Layer — SQLAlchemy + PostgreSQL
 Persiste tutti i trade, i segnali e le performance.
+
+Architecture: Exchange → PRIMARY STATE | Runtime → CACHE | Database → PERSISTENCE
 """
 
 from __future__ import annotations
-import json
+import time
 from datetime import datetime, timezone
 from loguru import logger
 
@@ -168,77 +170,138 @@ class DB:
             logger.error(f"DB get_stats: {e}")
             return {}
 # ==========================================================
+# POSITION CLOSE BY SYMBOL
+# ==========================================================
+
+    def close_position_by_symbol(self, symbol: str, exit_price: float = 0,
+                                 pnl_pct: float = 0, pnl_usdt: float = 0,
+                                 reason: str = "closed"):
+        """Close an open trade by symbol. Uses SQLAlchemy Session."""
+        if not self.enabled:
+            return
+        try:
+            with Session(self.engine) as s:
+                trade = (
+                    s.query(Trade)
+                    .filter(Trade.symbol == symbol, Trade.status == "open")
+                    .first()
+                )
+                if trade:
+                    trade.status = "closed"
+                    trade.exit_price = exit_price
+                    trade.pnl_pct = pnl_pct
+                    trade.pnl_usdt = pnl_usdt
+                    trade.close_reason = reason
+                    trade.closed_at = datetime.now(timezone.utc)
+                    s.commit()
+                    logger.info(f"[DB] closed {symbol} reason={reason}")
+        except Exception as e:
+            logger.error(f"[DB] close_position_by_symbol error: {e}")
+
+    def update_trade_status(self, symbol, status):
+        """Update trade status by symbol. Fixed to use SQLAlchemy Session."""
+        if not self.enabled:
+            return
+        try:
+            with Session(self.engine) as s:
+                trade = (
+                    s.query(Trade)
+                    .filter(Trade.symbol == symbol, Trade.status == "open")
+                    .first()
+                )
+                if trade:
+                    trade.status = status
+                    trade.closed_at = datetime.now(timezone.utc)
+                    s.commit()
+        except Exception as e:
+            logger.error(f"[DB] update_trade_status error: {e}")
+
+# ==========================================================
+# CLEAR / REPLACE OPEN POSITIONS (SYNC)
+# ==========================================================
+
+    def clear_open_positions(self):
+        """Mark all open trades as closed (sync_reset). Used before full rebuild."""
+        if not self.enabled:
+            return
+        try:
+            with Session(self.engine) as s:
+                open_trades = s.query(Trade).filter(Trade.status == "open").all()
+                now = datetime.now(timezone.utc)
+                for t in open_trades:
+                    t.status = "closed"
+                    t.close_reason = "sync_reset"
+                    t.closed_at = now
+                s.commit()
+                logger.info(f"[DB] cleared {len(open_trades)} open positions")
+        except Exception as e:
+            logger.error(f"[DB] clear_open_positions error: {e}")
+
+    def replace_open_positions(self, positions: list):
+        """
+        Atomic replace: close all open trades in DB, then insert new ones
+        from exchange-synced position list. Used at startup.
+        """
+        if not self.enabled:
+            return
+        try:
+            self.clear_open_positions()
+
+            for p in positions:
+                symbol = p.get("symbol", "")
+                order_id = f"sync_{int(time.time())}_{symbol.replace('/', '_')}"
+                self.save_trade_open(
+                    order_id=order_id,
+                    symbol=symbol,
+                    market=p.get("market", "futures"),
+                    strategy="exchange_sync",
+                    side=p.get("side", "buy"),
+                    entry=float(p.get("entry", 0)),
+                    size=float(p.get("size", 0)),
+                    stop_loss=float(p.get("stop_loss", 0)),
+                    take_profit=float(p.get("take_profit", 0)),
+                    confidence=0,
+                    atr=0,
+                    notes="recovered from exchange",
+                    timeframe="",
+                    leverage=int(p.get("leverage", 10)),
+                )
+
+            logger.info(f"[DB] replaced with {len(positions)} positions from exchange")
+
+        except Exception as e:
+            logger.error(f"[DB] replace_open_positions error: {e}")
+
+# ==========================================================
 # RECOVER OPEN TRADES
 # ==========================================================
 
-    def update_trade_status(self, symbol, status):
-
-        try:
-
-            query = """
-            UPDATE trades
-            SET status = %s,
-                closed_at = %s
-            WHERE symbol = %s
-            AND status = 'open'
-            """
-
-            self.conn.execute(
-                query,
-                (status, int(time.time()), symbol)
-            )
-
-        except Exception as e:
-            logger.error(f"[DB] update_trade_status error {e}")
-
-
-
     def get_open_trades(self):
-
-        """
-        Restituisce i trade ancora aperti nel formato atteso dal RiskManager.
-        """
-
+        """Return open trades in RiskManager format."""
         if not self.enabled:
             return []
-
         try:
-
             with Session(self.engine) as s:
-
                 trades = (
                     s.query(Trade)
                     .filter(Trade.status == "open")
                     .all()
                 )
-
                 out = []
-
                 for t in trades:
-
                     out.append({
-
                         "order_id": t.order_id,
                         "symbol": t.symbol,
                         "market": t.market,
                         "side": t.side,
-
                         "entry": t.entry_price,
                         "size": t.size,
-
                         "stop_loss": t.stop_loss,
                         "take_profit": t.take_profit,
-
-                        "atr": t.atr or 0
-
+                        "atr": t.atr or 0,
                     })
-
                 logger.info(f"[DB] recovered {len(out)} open trades")
-
                 return out
-
         except Exception as e:
-
             logger.error(f"DB get_open_trades: {e}")
-
             return []

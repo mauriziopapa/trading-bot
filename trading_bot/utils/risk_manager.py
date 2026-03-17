@@ -79,64 +79,100 @@ class RiskManager:
 
     def recover_from_db(self):
         """
-        Recover trades from DB, but skip any symbol already loaded
-        from exchange (exchange is source of truth).
+        DEPRECATED: Exchange is the sole source of truth.
+        Kept for backward compatibility but does nothing.
         """
+        logger.info("[RISK] recover_from_db skipped — exchange is sole source of truth")
+
+# ==========================================================
+# EXCHANGE SYNC (NEW)
+# ==========================================================
+
+    def sync_from_exchange(self, exchange_positions: list):
+        """
+        Rebuild open_futures from real exchange positions.
+        Exchange is the single source of truth.
+
+        Returns dict with sync results: {"added": [...], "removed": [...], "updated": [...]}
+        """
+        result = {"added": [], "removed": [], "updated": []}
 
         try:
-
-            if not self.db:
-                logger.info("[RISK] DB non collegato — skip recovery")
-                return
-
-            if not hasattr(self.db, "get_open_trades"):
-                logger.warning("[RISK] DB missing get_open_trades")
-                return
-
-            trades = self.db.get_open_trades()
-
-            if not trades:
-                logger.info("[RISK] recovered 0 open trades from DB")
-                return
-
-            added = 0
-
-            for t in trades:
-
-                symbol = t.get("symbol")
-                market = t.get("market", "futures")
-
-                # Skip if already recovered from exchange
-                with self._lock:
-                    if market == "spot" and symbol in self.open_spot:
-                        logger.debug(f"[RISK] {symbol} spot already from exchange, skip DB")
-                        continue
-                    if market == "futures" and symbol in self.open_futures:
-                        logger.debug(f"[RISK] {symbol} futures already from exchange, skip DB")
-                        continue
-
-                trade_data = {
-                    "symbol": symbol,
-                    "side": t.get("side"),
-                    "entry": safe_float(t.get("entry")),
-                    "size": safe_float(t.get("size")),
-                    "stop_loss": safe_float(t.get("stop_loss")),
-                    "take_profit": safe_float(t.get("take_profit")),
-                    "created_at": t.get("created_at", time.time())
+            # Build map of exchange positions: symbol -> position data
+            exchange_map = {}
+            for p in exchange_positions:
+                size = safe_float(p.get("contracts"))
+                if size <= 0:
+                    continue
+                symbol = p.get("symbol", "")
+                exchange_map[symbol] = {
+                    "side": p.get("side", ""),  # "long" or "short"
+                    "size": size,
+                    "entry": safe_float(p.get("entryPrice")),
                 }
 
-                if market == "spot":
-                    self.open_spot[symbol] = trade_data
-                else:
-                    self.open_futures[symbol] = trade_data
+            with self._lock:
+                # 1. Remove ghosts: in runtime but not on exchange
+                ghosts = [s for s in self.open_futures if s not in exchange_map]
+                for symbol in ghosts:
+                    self.open_futures.pop(symbol, None)
+                    self._pending_symbols.discard(symbol)
+                    result["removed"].append(symbol)
+                    logger.warning(f"[SYNC] ghost removed: {symbol}")
 
-                added += 1
-
-            logger.info(f"[RISK] recovered {added} additional trades from DB")
+                # 2. Add missing: on exchange but not in runtime
+                for symbol, edata in exchange_map.items():
+                    if symbol not in self.open_futures:
+                        side = "buy" if edata["side"] == "long" else "sell"
+                        entry = edata["entry"]
+                        trade = {
+                            "symbol": symbol,
+                            "side": side,
+                            "entry": entry,
+                            "size": edata["size"],
+                            "stop_loss": entry * (0.97 if side == "buy" else 1.03),
+                            "take_profit": entry * (1.04 if side == "buy" else 0.96),
+                            "created_at": time.time(),
+                            "market": "futures",
+                        }
+                        self.open_futures[symbol] = trade
+                        result["added"].append(symbol)
+                        logger.info(f"[SYNC] added missing: {symbol} {edata['side']}")
+                    else:
+                        # 3. Update size if exchange differs (exchange authoritative)
+                        current = self.open_futures[symbol]
+                        if abs(current.get("size", 0) - edata["size"]) > 1e-8:
+                            current["size"] = edata["size"]
+                            result["updated"].append(symbol)
 
         except Exception as e:
+            logger.error(f"[SYNC] sync_from_exchange error: {e}")
 
-            logger.error(f"[RISK] recover_from_db error {e}")
+        return result
+
+# ==========================================================
+# POSITION SIDE QUERIES (NEW)
+# ==========================================================
+
+    def get_position_side(self, symbol):
+        """Return current position side ('long'/'short') for a symbol, or None."""
+        with self._lock:
+            trade = self.open_futures.get(symbol)
+            if trade:
+                side = trade.get("side", "")
+                return "long" if side == "buy" else "short"
+            trade = self.open_spot.get(symbol)
+            if trade:
+                return "long"  # spot is always long
+            return None
+
+    def has_opposite_position(self, symbol, new_side):
+        """Check if an existing position conflicts with new_side ('buy'/'sell')."""
+        existing = self.get_position_side(symbol)
+        if existing is None:
+            return False
+        new_direction = "long" if new_side == "buy" else "short"
+        return existing != new_direction
 
 
 
