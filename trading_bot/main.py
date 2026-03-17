@@ -514,7 +514,9 @@ class TradingBot:
             market="futures"
         )
         
-        self.db.update_trade_status(symbol, "closed")
+            if hasattr(self.db, "update_trade_status"):
+                self.db.update_trade_status(symbol, "closed")
+                
         logger.info(f"[CLOSE] {symbol}")
 
 

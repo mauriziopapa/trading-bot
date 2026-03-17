@@ -173,23 +173,23 @@ class DB:
 
     def update_trade_status(self, symbol, status):
 
-    try:
+        try:
 
-        query = """
-        UPDATE trades
-        SET status = %s,
-            closed_at = %s
-        WHERE symbol = %s
-        AND status = 'open'
-        """
+            query = """
+            UPDATE trades
+            SET status = %s,
+                closed_at = %s
+            WHERE symbol = %s
+            AND status = 'open'
+            """
 
-        self.conn.execute(
-            query,
-            (status, int(time.time()), symbol)
-        )
+            self.conn.execute(
+                query,
+                (status, int(time.time()), symbol)
+            )
 
-    except Exception as e:
-        logger.error(f"[DB] update_trade_status error {e}")
+        except Exception as e:
+            logger.error(f"[DB] update_trade_status error {e}")
 
 
 
