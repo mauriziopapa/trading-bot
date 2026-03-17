@@ -362,7 +362,7 @@ class TradingBot:
                             if signal:
                                 break
                         except Exception as e:
-                            logger.debug(f"[STRAT ERROR] {symbol} {e}")
+                            logger.info(f"[STRAT ERROR] {symbol} {e}")
 
                     # ==================================================
                     # 🔥 FALLBACK MIGLIORATO
@@ -423,7 +423,7 @@ class TradingBot:
                         logger.info(f"[NO SIGNAL] {symbol}")
 
                 except Exception as inner:
-                    logger.debug(f"[SCALP INNER] {inner}")
+                    logger.info(f"[SCALP INNER] {inner}")
                     continue
 
         except Exception as e:
@@ -440,13 +440,13 @@ class TradingBot:
 
             for coin in coins[:3]:
 
-                if coin.get("volume", 0) < 10_000_000:
+                if coin.get("volume", 0) < 5_000_000:
                     continue
 
                 symbol = f"{coin['symbol']}/USDT:USDT"
 
-                if symbol not in self.allowed_symbols:
-                    continue
+                #if symbol not in self.allowed_symbols:
+                #    continue
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "5m", 120, "futures")
                 if not ohlcv:
@@ -496,6 +496,7 @@ class TradingBot:
             size = safe_float(risk_capital / price)
 
             if size * price < 20:
+                logger.info(f"[BLOCKED SIZE] {symbol} value={size * price}")
                 return
 
             order = self.exchange.create_market_order(symbol, side, size, "futures")
