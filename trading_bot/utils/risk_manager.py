@@ -78,6 +78,10 @@ class RiskManager:
 # ==========================================================
 
     def recover_from_db(self):
+        """
+        Recover trades from DB, but skip any symbol already loaded
+        from exchange (exchange is source of truth).
+        """
 
         try:
 
@@ -92,13 +96,24 @@ class RiskManager:
             trades = self.db.get_open_trades()
 
             if not trades:
-                logger.info("[RISK] recovered 0 open trades")
+                logger.info("[RISK] recovered 0 open trades from DB")
                 return
+
+            added = 0
 
             for t in trades:
 
                 symbol = t.get("symbol")
                 market = t.get("market", "futures")
+
+                # Skip if already recovered from exchange
+                with self._lock:
+                    if market == "spot" and symbol in self.open_spot:
+                        logger.debug(f"[RISK] {symbol} spot already from exchange, skip DB")
+                        continue
+                    if market == "futures" and symbol in self.open_futures:
+                        logger.debug(f"[RISK] {symbol} futures already from exchange, skip DB")
+                        continue
 
                 trade_data = {
                     "symbol": symbol,
@@ -115,7 +130,9 @@ class RiskManager:
                 else:
                     self.open_futures[symbol] = trade_data
 
-            logger.info(f"[RISK] recovered {len(trades)} open trades")
+                added += 1
+
+            logger.info(f"[RISK] recovered {added} additional trades from DB")
 
         except Exception as e:
 
@@ -127,15 +144,33 @@ class RiskManager:
 # GLOBAL RISK CONTROL (NEW)
 # ==========================================================
 
-    def can_trade(self):
+    def can_trade(self, symbol=None):
+        """
+        Global risk gate. If symbol is provided, also checks:
+        - symbol not already open
+        - symbol not pending (being executed)
+        """
 
         if self.global_stop:
             return False
 
-        if len(self.open_futures) >= self.max_concurrent_trades:
-            return False
+        with self._lock:
+            if len(self.open_futures) >= self.max_concurrent_trades:
+                return False
+
+            if symbol:
+                if symbol in self.open_futures or symbol in self.open_spot:
+                    return False
+                if symbol in self._pending_symbols:
+                    return False
 
         return True
+
+
+    def is_symbol_open(self, symbol):
+        """Check if a symbol already has an open position."""
+        with self._lock:
+            return symbol in self.open_futures or symbol in self.open_spot
 
 
     def check_global_risk(self, balance):
@@ -256,17 +291,29 @@ class RiskManager:
 
         try:
 
-            if symbol in self.open_futures:
-                return  # 🔥 anti duplicate
+            with self._lock:
 
-            if market == "spot":
-                self.open_spot[symbol] = trade
-            else:
-                self.open_futures[symbol] = trade
+                # Thread-safe duplicate guard
+                if market == "spot":
+                    if symbol in self.open_spot:
+                        logger.warning(f"[RISK] duplicate blocked: {symbol} spot already open")
+                        return False
+                    self.open_spot[symbol] = trade
+                else:
+                    if symbol in self.open_futures:
+                        logger.warning(f"[RISK] duplicate blocked: {symbol} futures already open")
+                        return False
+                    self.open_futures[symbol] = trade
+
+                # Release pending lock now that position is registered
+                self._pending_symbols.discard(symbol)
+
+            return True
 
         except Exception as e:
 
             logger.error(f"[RISK] register_open error {e}")
+            return False
 
 
     def register_close(self, symbol, pnl_pct, market, reason):
@@ -275,17 +322,22 @@ class RiskManager:
 
             pnl_pct = safe_float(pnl_pct)
 
-            if pnl_pct > 0:
-                self.wins += 1
-            else:
-                self.losses += 1
+            with self._lock:
 
-            self._recent_pnls.append(pnl_pct)
+                if pnl_pct > 0:
+                    self.wins += 1
+                else:
+                    self.losses += 1
 
-            if market == "spot":
-                self.open_spot.pop(symbol, None)
-            else:
-                self.open_futures.pop(symbol, None)
+                self._recent_pnls.append(pnl_pct)
+
+                if market == "spot":
+                    self.open_spot.pop(symbol, None)
+                else:
+                    self.open_futures.pop(symbol, None)
+
+                # Ensure pending lock is also released
+                self._pending_symbols.discard(symbol)
 
         except Exception as e:
 
@@ -295,6 +347,11 @@ class RiskManager:
 # ==========================================================
 # OPEN TRADES
 # ==========================================================
+
+    def open_symbols(self):
+        """Return set of all symbols with open positions."""
+        with self._lock:
+            return set(self.open_spot.keys()) | set(self.open_futures.keys())
 
     def all_open_trades(self):
 

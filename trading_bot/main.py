@@ -83,6 +83,10 @@ class TradingBot:
         self.last_trade_time = {}
         self.cooldown_seconds = 120
 
+        # Signal deduplication: {signal_id: timestamp}
+        self._executed_signals = {}
+        self._signal_dedup_ttl = 300  # 5 min TTL
+
         # 🔥 SOLO ASSET REALI
         self.allowed_symbols = [
             "BTC/USDT:USDT",
@@ -216,9 +220,18 @@ class TradingBot:
 # ==========================================================
 
     def _recover_positions_from_exchange(self):
+        """
+        Exchange is the source of truth.
+        Clear risk manager state and rebuild from real exchange positions.
+        """
 
         try:
             positions = self.exchange.fetch_positions()
+
+            # Clear existing futures state — exchange is authoritative
+            self.risk.open_futures.clear()
+
+            recovered = 0
 
             for p in positions:
 
@@ -243,8 +256,11 @@ class TradingBot:
                 }
 
                 self.risk.register_open(symbol, trade, "futures")
+                recovered += 1
 
-                logger.info(f"[RECOVERY] {symbol} restored")
+                logger.info(f"[RECOVERY] {symbol} restored from exchange")
+
+            logger.info(f"[RECOVERY] {recovered} positions recovered from exchange")
 
         except Exception as e:
             logger.error(f"[RECOVERY] {e}")
@@ -271,22 +287,22 @@ class TradingBot:
 
     def _is_valid_trade(self, symbol):
 
-        # 🔥 consenti top emerging + blue chips
-        base = symbol.split("/")[0]
+        # 1. Position guard — NEVER open duplicate
+        if self.risk.is_symbol_open(symbol):
+            logger.info(f"[GUARD] {symbol} already has open position")
+            return False
 
-        allowed_dynamic = ["BTC", "ETH", "SOL", "AVAX", "LINK"]
+        # 2. Global risk gate — max positions, global stop, pending lock
+        if not self.risk.can_trade(symbol):
+            logger.info(f"[GUARD] {symbol} blocked by risk gate")
+            return False
 
-        if base not in allowed_dynamic:
-            # fallback: accetta se volume alto
-            return True
-
+        # 3. Cooldown — prevent rapid re-entry on same symbol
         now = time.time()
         last = self.last_trade_time.get(symbol, 0)
 
         if now - last < self.cooldown_seconds:
-            return False
-
-        if len(self.risk.all_open_trades()) >= self.max_concurrent_trades:
+            logger.info(f"[GUARD] {symbol} in cooldown ({self.cooldown_seconds}s)")
             return False
 
         return True
@@ -313,7 +329,7 @@ class TradingBot:
             self.runtime["signals"] = coins[:5]
 
             markets = getattr(self.exchange, "_futures_markets", {})
-            open_symbols = {t["symbol"] for t in self.risk.all_open_trades()}
+            open_symbols = self.risk.open_symbols()
 
             for coin in coins[:5]:
 
@@ -436,7 +452,19 @@ class TradingBot:
 
         try:
 
+            # ==================================================
+            # RISK GATE — same as scalping
+            # ==================================================
+            if not self.risk.can_trade():
+                logger.info("[SKIP] Emerging blocked by risk gate")
+                return
+
             coins = self._emerging.scan() or []
+            if not coins:
+                return
+
+            markets = getattr(self.exchange, "_futures_markets", {})
+            open_symbols = self.risk.open_symbols()
 
             for coin in coins[:3]:
 
@@ -445,8 +473,13 @@ class TradingBot:
 
                 symbol = f"{coin['symbol']}/USDT:USDT"
 
-                #if symbol not in self.allowed_symbols:
-                #    continue
+                if symbol not in markets:
+                    continue
+
+                # Position guard — skip if already open
+                if symbol in open_symbols:
+                    logger.info(f"[SKIP] {symbol} already open (emerging)")
+                    continue
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "5m", 120, "futures")
                 if not ohlcv:
@@ -477,92 +510,127 @@ class TradingBot:
 
             symbol = signal.symbol
             side = signal.side
+            strategy = getattr(signal, "strategy", "sniper")
 
+            # ==================================================
+            # SIGNAL DEDUP — prevent executing same signal twice
+            # ==================================================
+            signal_id = f"{symbol}_{strategy}_{side}"
+            now = time.time()
+
+            # Clean expired entries
+            expired = [k for k, ts in self._executed_signals.items()
+                       if now - ts > self._signal_dedup_ttl]
+            for k in expired:
+                del self._executed_signals[k]
+
+            if signal_id in self._executed_signals:
+                logger.info(f"[DEDUP] {signal_id} already executed recently")
+                return
+
+            # ==================================================
+            # VALIDATION — position guard + risk gate + cooldown
+            # ==================================================
             if not self._is_valid_trade(symbol):
                 logger.info(f"[SKIP TRADE] {symbol} not allowed or blocked")
                 return
 
-            ticker = self.exchange.fetch_ticker(symbol, "futures")
-            if not ticker:
+            # ==================================================
+            # RESERVE SYMBOL — atomic lock to prevent race conditions
+            # ==================================================
+            if not self.risk.reserve_symbol(symbol):
+                logger.info(f"[SKIP TRADE] {symbol} already being executed")
                 return
 
-            price = safe_float(ticker.get("last"))
-            if price <= 0:
-                return
+            try:
 
-            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+                ticker = self.exchange.fetch_ticker(symbol, "futures")
+                if not ticker:
+                    return
 
-            # ==================================================
-            # 🔥 CONFIG
-            # ==================================================
-            leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
-            min_notional = 10  # soglia reale exchange
+                price = safe_float(ticker.get("last"))
+                if price <= 0:
+                    return
 
-            # ==================================================
-            # 🔥 RISK CAPITAL (BASE)
-            # ==================================================
-            risk_pct = 0.02
-            risk_capital = balance * risk_pct
+                balance = safe_float(self.exchange.get_usdt_balance("futures"))
 
-            # ==================================================
-            # 🔥 APPLY LEVERAGE
-            # ==================================================
-            notional = risk_capital * leverage
+                # ==================================================
+                # 🔥 CONFIG
+                # ==================================================
+                leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
+                min_notional = 10  # soglia reale exchange
 
-            # ==================================================
-            # 🔥 ENFORCE MIN NOTIONAL
-            # ==================================================
-            if notional < min_notional:
-                logger.warning(
-                    f"[SIZE BOOST] {symbol} notional too low ({notional:.2f}) → forcing {min_notional}"
+                # ==================================================
+                # 🔥 RISK CAPITAL (BASE)
+                # ==================================================
+                risk_pct = 0.02
+                risk_capital = balance * risk_pct
+
+                # ==================================================
+                # 🔥 APPLY LEVERAGE
+                # ==================================================
+                notional = risk_capital * leverage
+
+                # ==================================================
+                # 🔥 ENFORCE MIN NOTIONAL
+                # ==================================================
+                if notional < min_notional:
+                    logger.warning(
+                        f"[SIZE BOOST] {symbol} notional too low ({notional:.2f}) → forcing {min_notional}"
+                    )
+                    notional = min_notional
+
+                # ==================================================
+                # 🔥 FINAL SIZE
+                # ==================================================
+                size = safe_float(notional / price)
+
+                # ==================================================
+                # 🔥 SAFETY LOG
+                # ==================================================
+                logger.info(
+                    f"[SIZE] {symbol} balance={balance:.2f} risk={risk_capital:.2f} "
+                    f"lev={leverage} notional={notional:.2f} size={size}"
                 )
-                notional = min_notional
 
-            # ==================================================
-            # 🔥 FINAL SIZE
-            # ==================================================
-            size = safe_float(notional / price)
+                order = self.exchange.create_market_order(symbol, side, size, "futures")
+                if not order:
+                    logger.error(f"[ORDER FAILED] {symbol} size={size}")
+                    return
 
-            # ==================================================
-            # 🔥 SAFETY LOG
-            # ==================================================
-            logger.info(
-                f"[SIZE] {symbol} balance={balance:.2f} risk={risk_capital:.2f} "
-                f"lev={leverage} notional={notional:.2f} size={size}"
-            )
+                trade = {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry": price,
+                    "size": size,
+                    "stop_loss": price * 0.97,
+                    "take_profit": price * 1.04,
+                    "created_at": time.time(),
+                    "market": "futures"
+                }
 
-            order = self.exchange.create_market_order(symbol, side, size, "futures")
-            if not order:
-                logger.error(f"[ORDER FAILED] {symbol} size={size}")
-                return
+                # register_open releases the pending lock internally
+                self.risk.register_open(symbol, trade, "futures")
+                self.last_trade_time[symbol] = time.time()
+                self._executed_signals[signal_id] = now
 
-            trade = {
-                "symbol": symbol,
-                "side": side,
-                "entry": price,
-                "size": size,
-                "stop_loss": price * 0.97,
-                "take_profit": price * 1.04,
-                "created_at": time.time(),
-                "market": "futures"
-            }
+                self.notifier.trade_opened(
+                    symbol=symbol,
+                    side=side,
+                    entry=price,
+                    size=size,
+                    stop_loss=trade["stop_loss"],
+                    take_profit=trade["take_profit"],
+                    market="futures",
+                    strategy=strategy,
+                    confidence=getattr(signal, "confidence", 0.7)
+                )
 
-            self.risk.register_open(symbol, trade, "futures")
-            self.last_trade_time[symbol] = time.time()
+                logger.info(f"[TRADE OPEN] {symbol}")
 
-            self.notifier.trade_opened(
-                symbol=symbol,
-                side=side,
-                entry=price,
-                size=size,
-                stop_loss=trade["stop_loss"],
-                take_profit=trade["take_profit"],
-                market="futures",
-                strategy=getattr(signal, "strategy", "sniper"),
-                confidence=getattr(signal, "confidence", 0.7)
-            )
-
-            logger.info(f"[TRADE OPEN] {symbol}")
+            finally:
+                # Always release if register_open didn't consume it
+                self.risk.release_symbol(symbol)
 
         except Exception as e:
             logger.error(f"[TRADE] {e}")
@@ -597,10 +665,12 @@ class TradingBot:
                 symbol = trade["symbol"]
 
                 # --------------------------------------------------
-                # SKIP se posizione non esiste più
+                # GHOST CLEANUP — position gone from exchange, remove from risk manager
                 # --------------------------------------------------
 
                 if symbol not in active_symbols:
+                    logger.warning(f"[GHOST] {symbol} not on exchange — removing from tracker")
+                    self.risk.register_close(symbol, 0, trade.get("market", "futures"), "ghost_cleanup")
                     continue
 
                 # --------------------------------------------------
@@ -797,8 +867,9 @@ class TradingBot:
 
     def _update_sentiment(self):
         try:
-            self.sentiment = self._sentiment.get_market_sentiment()
-        except:
+            self.sentiment = self._sentiment.get_sentiment()
+        except Exception as e:
+            logger.debug(f"[SENTIMENT] update failed: {e}")
             self.sentiment = {}
 
 
