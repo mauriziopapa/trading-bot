@@ -295,23 +295,19 @@ class TradingBot:
         try:
 
             # ==================================================
-            # 🔥 RISK GATE (ANTI OVERTRADING)
+            # 🔥 RISK GATE
             # ==================================================
-
             if hasattr(self.risk, "can_trade") and not self.risk.can_trade():
+                logger.info("[SKIP] Risk gate blocked trading")
                 return
 
             coins = self._emerging.scan() or []
-
             if not coins:
                 return
 
-            # dashboard
             self.runtime["signals"] = coins[:5]
 
-            # exchange source of truth
             markets = getattr(self.exchange, "_futures_markets", {})
-
             open_symbols = {t["symbol"] for t in self.risk.all_open_trades()}
 
             for coin in coins[:5]:
@@ -320,108 +316,86 @@ class TradingBot:
 
                     symbol = f"{coin['symbol']}/USDT:USDT"
 
-                    # --------------------------------------------------
-                    # 🔥 MARKET VALIDATION (CRITICAL)
-                    # --------------------------------------------------
-
                     if symbol not in markets:
                         continue
-
-                    # --------------------------------------------------
-                    # 🔥 ANTI DUPLICATE TRADE
-                    # --------------------------------------------------
 
                     if symbol in open_symbols:
                         continue
 
-                    # --------------------------------------------------
-                    # 🔥 QUALITY FILTER
-                    # --------------------------------------------------
+                    change = coin.get("change", 0)
+                    volume = coin.get("volume", 0)
 
-                    change = coin.get("change", coin.get("price_change_24h", 0))
-                    volume = coin.get("volume", coin.get("volume_24h_usd", 0))
-
-                    # evita pump già finiti
-                    if abs(change) > 15:
+                    # 🔥 meno restrittivo
+                    if volume < 1_000_000:
                         continue
 
-                    # evita bassa liquidità
-                    if volume < 2_000_000:
-                        continue
-
-                    # --------------------------------------------------
-                    # 🔥 FETCH MARKET DATA
-                    # --------------------------------------------------
-
-                    ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 100, "futures")
+                    # ==================================================
+                    # DATA
+                    # ==================================================
+                    ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 50, "futures")
                     if not ohlcv:
                         continue
 
                     df = ohlcv_to_df(ohlcv)
-
                     if df is None or df.empty:
                         continue
 
                     signal = None
 
-                    # --------------------------------------------------
-                    # 🔥 STRATEGY ENGINE
-                    # --------------------------------------------------
-
+                    # ==================================================
+                    # STRATEGY ENGINE
+                    # ==================================================
                     for strat in self.strategies:
-
                         try:
                             signal = strat.analyze(df, symbol, "futures")
-
                             if signal:
                                 break
-
                         except Exception as e:
                             logger.debug(f"[STRAT ERROR] {symbol} {e}")
 
-                    # --------------------------------------------------
-                    # 🔥 SNIPER FALLBACK (ENSURES ENTRY)
-                    # --------------------------------------------------
-
+                    # ==================================================
+                    # 🔥 FALLBACK MIGLIORATO
+                    # ==================================================
                     if not signal:
 
                         last = df["close"].iloc[-1]
+                        prev = df["close"].iloc[-2]
+
                         ma5 = df["close"].rolling(5).mean().iloc[-1]
-                        ma10 = df["close"].rolling(10).mean().iloc[-1]
+                        ma20 = df["close"].rolling(20).mean().iloc[-1]
 
-                        # filtro mercato piatto
-                        spread = abs(df["close"].iloc[-1] - df["open"].iloc[-1]) / df["open"].iloc[-1]
+                        momentum = (last - prev) / prev
 
-                        if spread < 0.002:
+                        # 🔥 filtro più realistico
+                        if abs(momentum) < 0.001:  # 0.1%
                             continue
 
-                        # LONG
-                        if last > ma5 > ma10:
-
+                        # LONG momentum
+                        if last > ma5 and momentum > 0:
                             signal = type("Signal", (), {
                                 "symbol": symbol,
                                 "side": "buy",
-                                "strategy": "sniper_momentum",
-                                "confidence": 0.6
+                                "strategy": "sniper_momentum_v2",
+                                "confidence": 0.7
                             })()
 
-                        # SHORT
-                        elif last < ma5 < ma10:
-
+                        # SHORT momentum
+                        elif last < ma5 and momentum < 0:
                             signal = type("Signal", (), {
                                 "symbol": symbol,
                                 "side": "sell",
-                                "strategy": "sniper_momentum",
-                                "confidence": 0.6
+                                "strategy": "sniper_momentum_v2",
+                                "confidence": 0.7
                             })()
 
-                    # --------------------------------------------------
-                    # 🔥 EXECUTION
-                    # --------------------------------------------------
-
+                    # ==================================================
+                    # EXECUTION
+                    # ==================================================
                     if signal:
 
-                        logger.info(f"[SIGNAL] {symbol} ({signal.strategy})")
+                        logger.info(
+                            f"[ENTRY] {symbol} | {signal.side} | {signal.strategy}"
+                        )
 
                         self.runtime["signals"].append({
                             "symbol": symbol,
@@ -431,18 +405,18 @@ class TradingBot:
 
                         self._execute_signal(signal)
 
-                        # 🔥 stop dopo primo trade (controllo rischio)
+                        # opzionale: lasciare 1 trade per ciclo
                         break
 
-                except Exception as inner:
+                    else:
+                        logger.info(f"[NO SIGNAL] {symbol}")
 
+                except Exception as inner:
                     logger.debug(f"[SCALP INNER] {inner}")
                     continue
 
         except Exception as e:
-
             logger.error(f"[SCALP] {e}")
-
 # ==========================================================
 # EMERGING
 # ==========================================================
