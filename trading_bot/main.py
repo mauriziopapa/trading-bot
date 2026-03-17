@@ -308,6 +308,57 @@ class TradingBot:
 
 
 # ==========================================================
+# SCAN MERGING
+# ==========================================================
+
+    def _scan_emerging(self):
+
+        try:
+
+            if len(self.risk.all_open_trades()) >= self.max_concurrent_trades:
+                return
+
+            coins = self._emerging.scan() or []
+
+            for coin in coins[:3]:
+
+                # 🔥 filtro qualità
+                if coin.get("volume", 0) < 10_000_000:
+                    continue
+
+                symbol = f"{coin['symbol']}/USDT:USDT"
+
+                ohlcv = self.exchange.fetch_ohlcv(symbol, "5m", 120, "futures")
+                if not ohlcv:
+                    continue
+
+                df = ohlcv_to_df(ohlcv)
+
+                signal = None
+
+                for strat in self.strategies:
+                    signal = strat.analyze(df, symbol, "futures")
+                    if signal:
+                        break
+
+                # 🔥 fallback trend forte
+                if not signal:
+                    if df["close"].iloc[-1] > df["close"].rolling(10).mean().iloc[-1]:
+                        signal = type("Signal", (), {
+                            "symbol": symbol,
+                            "side": "buy",
+                            "strategy": "emerging_trend",
+                            "confidence": 0.7
+                        })()
+
+                if signal:
+                    logger.info(f"[EMERGING SIGNAL] {symbol}")
+                    self._execute_signal(signal)
+
+        except Exception as e:
+            logger.error(f"[EMERGING] {e}")
+
+# ==========================================================
 # EXECUTE
 # ==========================================================
 
