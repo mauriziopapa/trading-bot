@@ -303,109 +303,141 @@ class TradingBot:
 
             coins = self._emerging.scan() or []
 
-            # salva per dashboard
+            if not coins:
+                return
+
+            # dashboard
             self.runtime["signals"] = coins[:5]
+
+            # exchange source of truth
+            markets = getattr(self.exchange, "_futures_markets", {})
+
+            open_symbols = {t["symbol"] for t in self.risk.all_open_trades()}
 
             for coin in coins[:5]:
 
-                symbol = f"{coin['symbol']}/USDT:USDT"
+                try:
 
-                # --------------------------------------------------
-                # SYMBOL FILTER
-                # --------------------------------------------------
+                    symbol = f"{coin['symbol']}/USDT:USDT"
 
-                if hasattr(self, "allowed_symbols") and symbol not in self.allowed_symbols:
-                    continue
+                    # --------------------------------------------------
+                    # 🔥 MARKET VALIDATION (CRITICAL)
+                    # --------------------------------------------------
 
-                # --------------------------------------------------
-                # ANTI DUPLICATE POSITION
-                # --------------------------------------------------
+                    if symbol not in markets:
+                        continue
 
-                if symbol in [t["symbol"] for t in self.risk.all_open_trades()]:
-                    continue
+                    # --------------------------------------------------
+                    # 🔥 ANTI DUPLICATE TRADE
+                    # --------------------------------------------------
 
-                # --------------------------------------------------
-                # 🔥 QUALITY FILTER (CRITICAL)
-                # --------------------------------------------------
+                    if symbol in open_symbols:
+                        continue
 
-                change = coin.get("change", 0)
-                volume = coin.get("volume", 0)
+                    # --------------------------------------------------
+                    # 🔥 QUALITY FILTER
+                    # --------------------------------------------------
 
-                # evita pump finiti
-                if abs(change) > 15:
-                    continue
+                    change = coin.get("change", coin.get("price_change_24h", 0))
+                    volume = coin.get("volume", coin.get("volume_24h_usd", 0))
 
-                # evita bassa liquidità
-                if volume < 2_000_000:
-                    continue
+                    # evita pump già finiti
+                    if abs(change) > 15:
+                        continue
 
-                # --------------------------------------------------
-                # MARKET DATA
-                # --------------------------------------------------
+                    # evita bassa liquidità
+                    if volume < 2_000_000:
+                        continue
 
-                ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 100, "futures")
-                if not ohlcv:
-                    continue
+                    # --------------------------------------------------
+                    # 🔥 FETCH MARKET DATA
+                    # --------------------------------------------------
 
-                df = ohlcv_to_df(ohlcv)
+                    ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 100, "futures")
+                    if not ohlcv:
+                        continue
 
-                signal = None
+                    df = ohlcv_to_df(ohlcv)
 
-                # --------------------------------------------------
-                # STRATEGY LOOP
-                # --------------------------------------------------
+                    if df is None or df.empty:
+                        continue
 
-                for strat in self.strategies:
+                    signal = None
 
-                    try:
-                        signal = strat.analyze(df, symbol, "futures")
-                        if signal:
-                            break
-                    except Exception as e:
-                        logger.debug(f"[STRAT ERROR] {e}")
+                    # --------------------------------------------------
+                    # 🔥 STRATEGY ENGINE
+                    # --------------------------------------------------
 
-                # --------------------------------------------------
-                # 🔥 SNIPER FALLBACK (MOMENTUM ENGINE)
-                # --------------------------------------------------
+                    for strat in self.strategies:
 
-                if not signal:
+                        try:
+                            signal = strat.analyze(df, symbol, "futures")
 
-                    last = df["close"].iloc[-1]
-                    ma5 = df["close"].rolling(5).mean().iloc[-1]
-                    ma10 = df["close"].rolling(10).mean().iloc[-1]
+                            if signal:
+                                break
 
-                    # LONG
-                    if last > ma5 > ma10:
+                        except Exception as e:
+                            logger.debug(f"[STRAT ERROR] {symbol} {e}")
 
-                        signal = type("Signal", (), {
+                    # --------------------------------------------------
+                    # 🔥 SNIPER FALLBACK (ENSURES ENTRY)
+                    # --------------------------------------------------
+
+                    if not signal:
+
+                        last = df["close"].iloc[-1]
+                        ma5 = df["close"].rolling(5).mean().iloc[-1]
+                        ma10 = df["close"].rolling(10).mean().iloc[-1]
+
+                        # filtro mercato piatto
+                        spread = abs(df["close"].iloc[-1] - df["open"].iloc[-1]) / df["open"].iloc[-1]
+
+                        if spread < 0.002:
+                            continue
+
+                        # LONG
+                        if last > ma5 > ma10:
+
+                            signal = type("Signal", (), {
+                                "symbol": symbol,
+                                "side": "buy",
+                                "strategy": "sniper_momentum",
+                                "confidence": 0.6
+                            })()
+
+                        # SHORT
+                        elif last < ma5 < ma10:
+
+                            signal = type("Signal", (), {
+                                "symbol": symbol,
+                                "side": "sell",
+                                "strategy": "sniper_momentum",
+                                "confidence": 0.6
+                            })()
+
+                    # --------------------------------------------------
+                    # 🔥 EXECUTION
+                    # --------------------------------------------------
+
+                    if signal:
+
+                        logger.info(f"[SIGNAL] {symbol} ({signal.strategy})")
+
+                        self.runtime["signals"].append({
                             "symbol": symbol,
-                            "side": "buy",
-                            "strategy": "sniper_momentum",
-                            "confidence": 0.6
-                        })()
+                            "side": signal.side,
+                            "strategy": signal.strategy
+                        })
 
-                    # SHORT
-                    elif last < ma5 < ma10:
+                        self._execute_signal(signal)
 
-                        signal = type("Signal", (), {
-                            "symbol": symbol,
-                            "side": "sell",
-                            "strategy": "sniper_momentum",
-                            "confidence": 0.6
-                        })()
+                        # 🔥 stop dopo primo trade (controllo rischio)
+                        break
 
-                # --------------------------------------------------
-                # EXECUTION
-                # --------------------------------------------------
+                except Exception as inner:
 
-                if signal:
-
-                    logger.info(f"[SIGNAL] {symbol} ({signal.strategy})")
-
-                    self._execute_signal(signal)
-
-                    # 🔥 evita multi-entry nello stesso ciclo
-                    break
+                    logger.debug(f"[SCALP INNER] {inner}")
+                    continue
 
         except Exception as e:
 
