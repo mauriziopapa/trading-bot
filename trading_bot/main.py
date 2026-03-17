@@ -104,7 +104,50 @@ class TradingBot:
         schedule.every(3).minutes.do(lambda: self._scan_emerging())
         schedule.every(30).seconds.do(lambda: self._monitor_positions())
         schedule.every(5).minutes.do(lambda: self._check_regime())
+        
+# ==========================================================
+# SCAN SCALPING
+# ==========================================================
 
+    def _scan_scalping(self):
+
+        try:
+
+            coins = self._emerging.scan() or []
+
+            if not coins:
+                return
+
+            # 🔥 SOLO TOP COIN (AGGRESSIVO)
+            for coin in coins[:5]:
+
+                symbol = f"{coin['symbol']}/USDT:USDT"
+
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol,
+                    "1m",
+                    120,
+                    "futures"
+                )
+
+                if not ohlcv or len(ohlcv) < 50:
+                    continue
+
+                df = ohlcv_to_df(ohlcv)
+
+                for strat in self.strategies:
+
+                    signal = strat.analyze(df, symbol, "futures")
+
+                    if signal:
+
+                        logger.info(f"[SCALP SIGNAL] {symbol}")
+
+                        self._execute_signal(signal)
+
+        except Exception as e:
+
+            logger.error(f"[SCALPING] {e}")
 
 # ==========================================================
 # SCAN EMERGING
