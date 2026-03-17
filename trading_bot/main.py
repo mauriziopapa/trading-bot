@@ -293,7 +293,7 @@ class TradingBot:
         if not strategies:
             return
 
-        coins = self._emerging.scan() or []
+        coins = self._emerging.scan(regime="AGGRO") or []
 
         symbols = []
 
@@ -413,7 +413,7 @@ class TradingBot:
 
         try:
 
-            coins = self._emerging.scan()
+            coins = self._emerging.scan(regime="AGGRO")
 
             if not coins:
                 return

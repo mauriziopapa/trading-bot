@@ -1,6 +1,6 @@
 """
-Emerging Coins Scanner — v4.3
-Improved stable production version
+Emerging Coins Scanner — v5.0
+Adaptive Alpha Engine (production-ready)
 """
 
 import time
@@ -17,10 +17,9 @@ COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 BITGET_BASE = "https://api.bitget.com/api/v2"
 
 _HEADERS = {
-    "User-Agent": "TradingBot/4.3",
+    "User-Agent": "TradingBot/5.0",
     "Accept": "application/json"
 }
-
 
 _STABLECOINS = {
     "USDT","USDC","BUSD","DAI","TUSD","USDP","FRAX",
@@ -30,19 +29,42 @@ _STABLECOINS = {
 _MAJORS = {"BTC","ETH"}
 
 
-def _cfg(key, default):
+# ==========================================
+# CONFIG HELPERS
+# ==========================================
 
+def _cfg(key, default):
     try:
         val = getattr(settings, key, None)
-
         if val is not None:
             return type(default)(val)
-
     except Exception:
         pass
-
     return default
 
+
+def _adaptive_params(regime=None):
+
+    base = {
+        "min_vol": _cfg("EM_MIN_VOLUME_USD", 500_000),
+        "min_chg": _cfg("EM_MIN_CHANGE_24H", 1.5),
+        "min_surge": _cfg("EM_MIN_VOLUME_SURGE", 1.03),
+    }
+
+    if regime == "AGGRO":
+        base["min_chg"] *= 0.7
+        base["min_surge"] *= 0.9
+
+    elif regime == "DEFENSIVE":
+        base["min_chg"] *= 1.3
+        base["min_vol"] *= 1.5
+
+    return base
+
+
+# ==========================================
+# MAIN CLASS
+# ==========================================
 
 class EmergingScanner:
 
@@ -58,6 +80,11 @@ class EmergingScanner:
         self._vol_percentiles = {}
         self._vol_percentiles_ts = 0
 
+
+# ==========================================
+# MARKETS
+# ==========================================
+
     def _get_bitget_markets(self):
 
         now = time.time()
@@ -66,11 +93,9 @@ class EmergingScanner:
             return self._bitget_markets
 
         try:
-
             import ccxt
 
             exchange = ccxt.bitget()
-
             markets = exchange.load_markets()
 
             self._bitget_markets = markets
@@ -81,30 +106,28 @@ class EmergingScanner:
             return markets
 
         except Exception as e:
-
             logger.warning(f"[EMERGING] markets load error {e}")
-
             return {}
 
-# ==========================================================
-# MAIN SCAN
-# ==========================================================
 
-    def scan(self, force=False):
+# ==========================================
+# MAIN SCAN
+# ==========================================
+
+    def scan(self, force=False, regime=None):
 
         now = time.time()
 
         if not force and (now - self._last_scan_ts) < self._scan_ttl:
             return self._last_scan
 
-        min_vol = _cfg("EM_MIN_VOLUME_USD", 2_000_000)
-        min_chg = _cfg("EM_MIN_CHANGE_24H", 3)
-        min_surge = _cfg("EM_MIN_VOLUME_SURGE", 1.1)
-        max_results = _cfg("EM_MAX_RESULTS", 20)
+        cfg = _adaptive_params(regime)
 
         logger.info(
-            f"[EMERGING v4.3] Scan — vol≥${min_vol/1e6:.2f}M "
-            f"chg≥{min_chg}% surge≥{min_surge}x"
+            f"[EMERGING v5.0] regime={regime} | "
+            f"vol≥${cfg['min_vol']/1e6:.2f}M "
+            f"chg≥{cfg['min_chg']:.2f}% "
+            f"surge≥{cfg['min_surge']:.2f}x"
         )
 
         self._refresh_volume_percentiles()
@@ -119,9 +142,7 @@ class EmergingScanner:
         ]
 
         for name, fetcher in sources:
-
             try:
-
                 coins = fetcher()
                 src_counts[name] = len(coins)
 
@@ -129,11 +150,10 @@ class EmergingScanner:
                     self._merge(raw, coin)
 
             except Exception as e:
-
                 src_counts[name] = f"ERR {e}"
 
         logger.info(
-            f"[EMERGING] Fonti: {src_counts} → {len(raw)} candidate pre-filtro"
+            f"[EMERGING] Fonti: {src_counts} → {len(raw)} candidate"
         )
 
         results = []
@@ -147,73 +167,107 @@ class EmergingScanner:
             chg = coin.get("price_change_24h", 0)
             surge = coin.get("volume_surge", 1)
 
-            if vol < min_vol:
-                continue
+            logger.debug(
+                f"[EM_FILTER] {sym} | vol={vol:.0f} | chg={chg:.2f} | surge={surge:.2f}"
+            )
 
-            if abs(chg) < min_chg:
-                continue
+            # ==========================================
+            # SOFT FILTER (2/3 RULE)
+            # ==========================================
+            score_filter = 0
 
-            if surge < min_surge:
+            if vol >= cfg["min_vol"]:
+                score_filter += 1
+
+            if abs(chg) >= cfg["min_chg"]:
+                score_filter += 1
+
+            if surge >= cfg["min_surge"]:
+                score_filter += 1
+
+            if score_filter < 2:
                 continue
 
             coin["score"], coin["score_detail"] = self._score(coin)
+            coin["confidence"] = min(1.0, coin["score"] / 40)
 
             results.append(coin)
 
         results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-        # 🔧 FILTRO MERCATI TRADABILI SU BITGET
-        try:
-            markets = self._get_bitget_markets()
+        results = self._filter_tradable(results)
 
-            tradable = []
+        # ==========================================
+        # FALLBACK
+        # ==========================================
+        if not results:
+            logger.warning("[EMERGING] fallback activated")
 
-            for c in results:
+            for sym, coin in raw.items():
 
-                sym = c["symbol"].upper()
+                if sym in _STABLECOINS or sym in _MAJORS:
+                    continue
 
-                pair = f"{sym}/USDT"
+                coin["score"], coin["score_detail"] = self._score(coin)
+                coin["confidence"] = 0.3
 
-                if pair in markets:
+                results.append(coin)
 
-                    tradable.append(c)
+            results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
-                else:
-
-                    # fallback: ricerca simbolo parziale
-                    for m in markets:
-
-                        if m.endswith("/USDT") and m.startswith(sym):
-
-                            tradable.append(c)
-                            break
-
-            results = tradable
-
-        except Exception as e:
-            logger.warning(f"Market filter error: {e}")
-
-        self._last_scan = results[:max_results]
+        self._last_scan = results[:20]
         self._last_scan_ts = now
 
-        logger.info(f"[EMERGING v4.3] {len(self._last_scan)} coin trovate")
+        logger.info(f"[EMERGING v5.0] {len(self._last_scan)} coin trovate")
 
         for c in self._last_scan:
-
             logger.info(
                 f"{c['symbol']} | "
                 f"${c.get('volume_24h_usd',0)/1e6:.1f}M | "
                 f"{c.get('price_change_24h',0):+.1f}% | "
                 f"surge×{c.get('volume_surge',0):.2f} | "
-                f"score={c.get('score',0):.2f}"
+                f"score={c.get('score',0):.2f} | "
+                f"conf={c.get('confidence',0):.2f}"
             )
 
         return self._last_scan
 
 
-# ==========================================================
+# ==========================================
+# MARKET FILTER
+# ==========================================
+
+    def _filter_tradable(self, results):
+
+        try:
+
+            markets = self._get_bitget_markets()
+            tradable = []
+
+            for c in results:
+
+                sym = c["symbol"].upper()
+                pair = f"{sym}/USDT"
+
+                if pair in markets:
+                    tradable.append(c)
+                    continue
+
+                for m in markets.keys():
+                    if m.split("/")[0] == sym:
+                        tradable.append(c)
+                        break
+
+            return tradable
+
+        except Exception as e:
+            logger.warning(f"Market filter error: {e}")
+            return results
+
+
+# ==========================================
 # VOLUME PERCENTILES
-# ==========================================================
+# ==========================================
 
     def _refresh_volume_percentiles(self):
 
@@ -251,11 +305,9 @@ class EmergingScanner:
                 return
 
             vols.sort()
-
             n = len(vols)
 
             self._vol_percentiles = {
-
                 "p50": vols[int(n*0.50)],
                 "p75": vols[int(n*0.75)],
                 "p90": vols[int(n*0.90)],
@@ -264,13 +316,12 @@ class EmergingScanner:
             self._vol_percentiles_ts = now
 
         except Exception as e:
-
             logger.debug(f"[EMERGING] percentile refresh error {e}")
 
 
-# ==========================================================
+# ==========================================
 # SURGE
-# ==========================================================
+# ==========================================
 
     def _calc_surge(self, symbol, volume_24h):
 
@@ -289,9 +340,9 @@ class EmergingScanner:
         return min(round(surge,2),20)
 
 
-# ==========================================================
+# ==========================================
 # DATA SOURCES
-# ==========================================================
+# ==========================================
 
     def _fetch_coingecko_trending(self):
 
@@ -385,14 +436,12 @@ class EmergingScanner:
                 sym = t.get("symbol").replace("USDT","")
 
                 out.append({
-
                     "symbol":sym.upper(),
                     "price_change_24h":round(chg,2),
                     "volume_24h_usd":vol,
                     "market_cap_usd":0,
                     "volume_surge":self._calc_surge(sym,vol),
                     "sources":["bitget"]
-
                 })
 
             out.sort(key=lambda x: x["price_change_24h"],reverse=True)
@@ -403,9 +452,9 @@ class EmergingScanner:
             return []
 
 
-# ==========================================================
+# ==========================================
 # HELPERS
-# ==========================================================
+# ==========================================
 
     def _coingecko_markets_by_ids(self, ids, source):
 
@@ -435,11 +484,9 @@ class EmergingScanner:
     def _norm_cg(self, coin, source):
 
         sym = coin.get("symbol","").upper().replace("-","")
-
         vol = float(coin.get("total_volume") or 0)
 
         return {
-
             "symbol":sym,
             "price":coin.get("current_price"),
             "price_change_24h":coin.get("price_change_percentage_24h") or 0,
@@ -447,7 +494,6 @@ class EmergingScanner:
             "market_cap_usd":coin.get("market_cap") or 0,
             "volume_surge":self._calc_surge(sym,vol),
             "sources":[source]
-
         }
 
 
@@ -459,11 +505,8 @@ class EmergingScanner:
             return
 
         if sym not in raw:
-
             raw[sym] = coin
-
         else:
-
             e = raw[sym]
 
             e["volume_24h_usd"] = max(
@@ -471,7 +514,6 @@ class EmergingScanner:
                 coin.get("volume_24h_usd",0)
             )
 
-            # FIX change merge
             if abs(coin.get("price_change_24h",0)) > abs(e.get("price_change_24h",0)):
                 e["price_change_24h"] = coin.get("price_change_24h")
 
@@ -480,26 +522,26 @@ class EmergingScanner:
             )
 
 
-# ==========================================================
+# ==========================================
 # SCORE
-# ==========================================================
+# ==========================================
 
     def _score(self, coin):
 
-        chg = abs(coin.get("price_change_24h",0))
-        vol = coin.get("volume_24h_usd",0)
-        surge = coin.get("volume_surge",1)
+        chg = abs(coin.get("price_change_24h", 0))
+        vol = coin.get("volume_24h_usd", 0)
+        surge = coin.get("volume_surge", 1)
 
-        mom = min(30, chg)
-        vol_pt = min(20, vol / 5_000_000)
-        sur_pt = min(20, surge * 3)
-        src_pt = len(coin.get("sources",[])) * 4
+        mom = min(30, chg * 1.5)
+        vol_pt = min(25, vol / 2_000_000)
+        sur_pt = min(25, surge * 5)
+        src_pt = len(coin.get("sources", [])) * 5
 
         score = mom + vol_pt + sur_pt + src_pt
 
         return score, {
-            "momentum":mom,
-            "volume":vol_pt,
-            "surge":sur_pt,
-            "sources":src_pt
+            "momentum": mom,
+            "volume": vol_pt,
+            "surge": sur_pt,
+            "sources": src_pt
         }
