@@ -456,27 +456,97 @@ class TradingBot:
 
     def _close_position(self, trade, price, reason):
 
-        symbol = trade["symbol"]
+        try:
 
-        side = "sell" if trade["side"] == "buy" else "buy"
+            symbol = trade["symbol"]
+            side = "sell" if trade["side"] == "buy" else "buy"
 
-        self.exchange.create_market_order(symbol, side, trade["size"], "futures")
+            # ==================================================
+            # 🔥 REAL SIZE FROM EXCHANGE (CRITICAL FIX)
+            # ==================================================
 
-        pnl_pct = (price - trade["entry"]) / trade["entry"] * 100
-        pnl_usdt = pnl_pct * trade["size"]
+            positions = self.exchange.fetch_positions()
 
-        self.notifier.trade_closed(
-            symbol=symbol,
-            side=trade["side"],
-            entry=trade["entry"],
-            exit_price=price,
-            pnl_pct=pnl_pct,
-            pnl_usdt=pnl_usdt,
-            reason=reason,
-            market="futures"
-        )
+            real_size = 0
 
-        logger.info(f"[CLOSE] {symbol} PnL={pnl_pct:.2f}%")
+            for p in positions:
+                if p.get("symbol") == symbol:
+                    real_size = float(p.get("contracts") or 0)
+                    break
+
+            if real_size <= 0:
+                logger.warning(f"[CLOSE] no position on exchange {symbol}")
+                return
+
+            # ==================================================
+            # 🔥 SAFETY BUFFER (avoid precision issues)
+            # ==================================================
+
+            real_size *= 0.98  # evita rejection
+
+            # ==================================================
+            # EXECUTE CLOSE
+            # ==================================================
+
+            order = self.exchange.create_market_order(
+                symbol,
+                side,
+                real_size,
+                "futures"
+            )
+
+            if not order:
+                logger.error(f"[CLOSE] failed {symbol}")
+                return
+
+            # ==================================================
+            # PNL CALC
+            # ==================================================
+
+            entry = trade.get("entry", 0)
+            pnl_pct = ((price - entry) / entry) * 100
+
+            if trade["side"] == "sell":
+                pnl_pct *= -1
+
+            pnl_usdt = pnl_pct * real_size
+
+            # ==================================================
+            # UPDATE RISK
+            # ==================================================
+
+            self.risk.register_close(symbol, pnl_pct, "futures", reason)
+
+            # ==================================================
+            # DB SYNC
+            # ==================================================
+
+            if hasattr(self.db, "update_trade_status"):
+                try:
+                    self.db.update_trade_status(symbol, "closed")
+                except:
+                    pass
+
+            # ==================================================
+            # NOTIFY
+            # ==================================================
+
+            self.notifier.trade_closed(
+                symbol=symbol,
+                side=trade["side"],
+                entry=entry,
+                exit_price=price,
+                pnl_pct=pnl_pct,
+                pnl_usdt=pnl_usdt,
+                reason=reason,
+                market="futures"
+            )
+
+            logger.info(f"[CLOSE] {symbol} PnL={pnl_pct:.2f}%")
+
+        except Exception as e:
+
+            logger.error(f"[CLOSE ERROR] {e}")
 
 
 # ==========================================================
