@@ -223,41 +223,68 @@ class RiskManager:
 # POSITION SIZE
 # ==========================================================
 
-    def position_size(self, balance, entry, stop_loss, atr=None, market="spot", symbol=""):
+    def compute_position_size(self, balance, price, leverage, risk_pct=None):
+        """
+        Correct position sizing: notional = risk_capital * leverage, size = notional / price.
+        Includes hard safety cap at 80% of max leverage exposure.
 
+        Returns dict: {size, notional, required_margin} or None if invalid.
+        """
         try:
-
             balance = safe_float(balance)
-            entry = safe_float(entry)
-            stop_loss = safe_float(stop_loss)
+            price = safe_float(price)
+            leverage = max(1, int(leverage))
 
-            if balance <= 0 or entry <= 0:
-                return 0
+            if balance <= 0 or price <= 0:
+                return None
 
-            risk_pct = safe_float(settings.MAX_RISK_PCT) / 100
-            risk_amount = balance * risk_pct
+            if risk_pct is None:
+                risk_pct = safe_float(settings.MAX_RISK_PCT) / 100
 
-            risk_per_unit = abs(entry - stop_loss)
+            # Core formula: risk capital * leverage = notional
+            risk_capital = balance * risk_pct
+            notional = risk_capital * leverage
 
-            if risk_per_unit <= 0:
-                risk_per_unit = entry * 0.01
+            # HARD SAFETY CAP — never exceed 80% of max leveraged exposure
+            max_notional = balance * leverage * 0.8
+            notional = min(notional, max_notional)
 
-            size = risk_amount / risk_per_unit
+            # Minimum notional (exchange rejects below ~5 USDT)
+            min_notional = 10
+            if notional < min_notional:
+                notional = min_notional
 
-            max_notional = balance * (safe_float(settings.MAX_NOTIONAL_PCT) / 100)
+            # Margin validation
+            required_margin = notional / leverage
+            if required_margin > balance:
+                logger.warning(
+                    f"[RISK] margin check FAILED: required={required_margin:.2f} "
+                    f"available={balance:.2f}"
+                )
+                return None
 
-            if size * entry > max_notional:
-                size = max_notional / entry
+            size = notional / price
 
-            if size * entry < 20:
-                return 0
+            if size <= 0:
+                return None
 
-            return round(size, 6)
+            return {
+                "size": round(size, 6),
+                "notional": round(notional, 2),
+                "required_margin": round(required_margin, 2),
+            }
 
         except Exception as e:
+            logger.error(f"[RISK] compute_position_size error {e}")
+            return None
 
-            logger.error(f"[RISK] position_size error {e}")
+    def position_size(self, balance, entry, stop_loss, atr=None, market="spot", symbol=""):
+        """Legacy method — kept for backward compatibility."""
+        leverage = safe_float(getattr(settings, "DEFAULT_LEVERAGE", 10))
+        result = self.compute_position_size(balance, entry, leverage)
+        if result is None:
             return 0
+        return result["size"]
 
 
 # ==========================================================
