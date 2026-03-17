@@ -274,6 +274,11 @@ class BitgetExchange:
 
     def create_market_order(self, symbol, side, amount, market="futures", params=None):
 
+        logger.info(f"[ORDER REQUEST] {market} {side} {symbol} amount={amount}")
+
+        # ==========================================================
+        # PAPER MODE
+        # ==========================================================
         if not settings.IS_LIVE:
 
             logger.info(f"[PAPER] {market} {side} {symbol} {amount}")
@@ -289,6 +294,9 @@ class BitgetExchange:
             client = self.futures if market == "futures" else self.spot
             markets = self._futures_markets if market == "futures" else self._spot_markets
 
+            # ==========================================================
+            # NORMALIZE SYMBOL
+            # ==========================================================
             symbol = self._normalize_symbol(symbol, market)
 
             if symbol not in markets:
@@ -298,40 +306,102 @@ class BitgetExchange:
             amount = safe_float(amount)
 
             if amount <= 0:
+                logger.error(f"[ORDER] invalid amount {amount}")
                 return None
 
-            # precision
-            amount = float(client.amount_to_precision(symbol, amount))
+            # ==========================================================
+            # PRECISION HANDLING
+            # ==========================================================
+            try:
+                amount = float(client.amount_to_precision(symbol, amount))
+            except Exception as e:
+                logger.error(f"[ORDER] precision error {symbol} {e}")
+                return None
 
-            # min size
+            # ==========================================================
+            # MIN SIZE CHECK
+            # ==========================================================
             min_size = safe_float(markets[symbol]["limits"]["amount"]["min"])
 
             if amount < min_size:
-                logger.warning(f"[ORDER] too small {symbol}")
+                logger.warning(f"[ORDER] too small {symbol} amount={amount} min={min_size}")
                 return None
 
-            order = self._retry(
-                client.create_market_order,
-                symbol,
-                side,
-                amount,
-                params=params or {}
-            )
+            # ==========================================================
+            # MIN NOTIONAL CHECK (importantissimo su futures)
+            # ==========================================================
+            ticker = client.fetch_ticker(symbol)
+            price = safe_float(ticker.get("last"))
+
+            if price <= 0:
+                logger.error(f"[ORDER] invalid price {symbol}")
+                return None
+
+            notional = amount * price
+
+            if notional < 5:  # soglia sicurezza (Bitget spesso > 5 USDT)
+                logger.warning(f"[ORDER] notional too small {symbol} value={notional}")
+                return None
+
+            # ==========================================================
+            # FUTURES PARAMS (CRITICO)
+            # ==========================================================
+            params = params or {}
+
+            if market == "futures":
+
+                params.update({
+                    "marginMode": "cross",  # oppure "isolated"
+                    "holdSide": "long" if side == "buy" else "short"
+                })
+
+            # ==========================================================
+            # EXECUTION (RETRY SAFE)
+            # ==========================================================
+            order = None
+
+            try:
+
+                order = self._retry(
+                    client.create_market_order,
+                    symbol,
+                    side,
+                    amount,
+                    params=params
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"[ORDER ERROR] {symbol} | side={side} | amount={amount} | params={params} | err={e}"
+                )
+                return None
 
             if not order:
+                logger.error(f"[ORDER FAILED] {symbol} no response")
                 return None
+
+            # ==========================================================
+            # RESPONSE NORMALIZATION
+            # ==========================================================
+            filled = safe_float(order.get("filled") or amount)
+
+            logger.info(
+                f"[ORDER SUCCESS] {symbol} | side={side} | filled={filled}"
+            )
 
             return {
                 "id": order.get("id"),
-                "filled": safe_float(order.get("filled") or amount),
+                "filled": filled,
                 "status": order.get("status", "unknown")
             }
 
         except Exception as e:
 
-            logger.error(f"[ORDER] {symbol} {e}")
-            return None
+            logger.error(
+                f"[ORDER FATAL] {symbol} | side={side} | amount={amount} | err={e}"
+            )
 
+            return None
 
 # ==========================================================
 # POSITIONS

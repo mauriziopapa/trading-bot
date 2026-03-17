@@ -271,8 +271,14 @@ class TradingBot:
 
     def _is_valid_trade(self, symbol):
 
-        if symbol not in self.allowed_symbols:
-            return False
+        # 🔥 consenti top emerging + blue chips
+        base = symbol.split("/")[0]
+
+        allowed_dynamic = ["BTC", "ETH", "SOL", "AVAX", "LINK"]
+
+        if base not in allowed_dynamic:
+            # fallback: accetta se volume alto
+            return True
 
         now = time.time()
         last = self.last_trade_time.get(symbol, 0)
@@ -284,7 +290,6 @@ class TradingBot:
             return False
 
         return True
-
 
 # ==========================================================
 # SCALPING
@@ -320,6 +325,12 @@ class TradingBot:
                         continue
 
                     if symbol in open_symbols:
+                        logger.info(f"[SKIP] {symbol} already in open trades")
+                        continue
+
+                    # 🔥 anche protezione runtime (importantissima)
+                    if symbol in self.runtime.get("active_symbols", set()):
+                        logger.info(f"[SKIP] {symbol} already active (runtime)")
                         continue
 
                     change = coin.get("change", 0)
@@ -468,6 +479,7 @@ class TradingBot:
             side = signal.side
 
             if not self._is_valid_trade(symbol):
+                logger.info(f"[SKIP TRADE] {symbol} not allowed or blocked")
                 return
 
             ticker = self.exchange.fetch_ticker(symbol, "futures")
@@ -488,6 +500,7 @@ class TradingBot:
 
             order = self.exchange.create_market_order(symbol, side, size, "futures")
             if not order:
+                logger.error(f"[ORDER FAILED] {symbol} size={size}")
                 return
 
             trade = {
