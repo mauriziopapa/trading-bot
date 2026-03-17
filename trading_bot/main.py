@@ -564,49 +564,34 @@ class TradingBot:
                     return
 
                 balance = safe_float(self.exchange.get_usdt_balance("futures"))
-
-                # ==================================================
-                # 🔥 CONFIG
-                # ==================================================
                 leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
-                min_notional = 10  # soglia reale exchange
 
                 # ==================================================
-                # 🔥 RISK CAPITAL (BASE)
+                # POSITION SIZING — correct formula with margin check
                 # ==================================================
-                risk_pct = 0.02
-                risk_capital = balance * risk_pct
+                sizing = self.risk.compute_position_size(
+                    balance=balance, price=price, leverage=leverage,
+                )
+                if sizing is None:
+                    logger.warning(f"[BLOCKED] {symbol} sizing failed (balance={balance:.2f})")
+                    return
 
-                # ==================================================
-                # 🔥 APPLY LEVERAGE
-                # ==================================================
-                notional = risk_capital * leverage
+                size = sizing["size"]
+                notional = sizing["notional"]
+                required_margin = sizing["required_margin"]
 
-                # ==================================================
-                # 🔥 ENFORCE MIN NOTIONAL
-                # ==================================================
-                if notional < min_notional:
-                    logger.warning(
-                        f"[SIZE BOOST] {symbol} notional too low ({notional:.2f}) → forcing {min_notional}"
-                    )
-                    notional = min_notional
-
-                # ==================================================
-                # 🔥 FINAL SIZE
-                # ==================================================
-                size = safe_float(notional / price)
-
-                # ==================================================
-                # 🔥 SAFETY LOG
-                # ==================================================
                 logger.info(
-                    f"[SIZE] {symbol} balance={balance:.2f} risk={risk_capital:.2f} "
-                    f"lev={leverage} notional={notional:.2f} size={size}"
+                    f"[SIZE] {symbol} balance={balance:.2f} "
+                    f"notional={notional:.2f} margin={required_margin:.2f} "
+                    f"lev={leverage} size={size}"
                 )
 
+                # ==================================================
+                # SINGLE ATTEMPT — no retry loop
+                # ==================================================
                 order = self.exchange.create_market_order(symbol, side, size, "futures")
                 if not order:
-                    logger.error(f"[ORDER FAILED] {symbol} size={size}")
+                    logger.error(f"[ORDER FAILED] {symbol} size={size} notional={notional:.2f}")
                     return
 
                 trade = {
@@ -856,27 +841,15 @@ class TradingBot:
                 pass
 
             # ==================================================
-            # 🔥 SAFE EXECUTION (ANTI REJECTION)
+            # CLOSE ORDER — single attempt, no retry loop
             # ==================================================
 
-            for attempt in [1.0, 0.95, 0.90, 0.85]:
+            order = self.exchange.create_market_order(
+                symbol, side, real_size, "futures"
+            )
 
-                size = real_size * attempt
-
-                if size <= 0:
-                    continue
-
-                order = self.exchange.create_market_order(
-                    symbol,
-                    side,
-                    size,
-                    "futures"
-                )
-
-                if order:
-                    break
-            else:
-                logger.error(f"[CLOSE] failed after retries {symbol}")
+            if not order:
+                logger.error(f"[CLOSE FAILED] {symbol} size={real_size}")
                 return
 
             # ==================================================
@@ -906,7 +879,7 @@ class TradingBot:
             if trade["side"] == "sell":
                 pnl_pct *= -1
 
-            pnl_usdt = pnl_pct * size
+            pnl_usdt = pnl_pct * real_size
 
             # ==================================================
             # UPDATE STATE
