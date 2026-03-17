@@ -294,14 +294,54 @@ class TradingBot:
 
         try:
 
+            # ==================================================
+            # 🔥 RISK GATE (ANTI OVERTRADING)
+            # ==================================================
+
+            if hasattr(self.risk, "can_trade") and not self.risk.can_trade():
+                return
+
             coins = self._emerging.scan() or []
 
-            for coin in coins[:3]:
+            # salva per dashboard
+            self.runtime["signals"] = coins[:5]
+
+            for coin in coins[:5]:
 
                 symbol = f"{coin['symbol']}/USDT:USDT"
 
-                if symbol not in self.allowed_symbols:
+                # --------------------------------------------------
+                # SYMBOL FILTER
+                # --------------------------------------------------
+
+                if hasattr(self, "allowed_symbols") and symbol not in self.allowed_symbols:
                     continue
+
+                # --------------------------------------------------
+                # ANTI DUPLICATE POSITION
+                # --------------------------------------------------
+
+                if symbol in [t["symbol"] for t in self.risk.all_open_trades()]:
+                    continue
+
+                # --------------------------------------------------
+                # 🔥 QUALITY FILTER (CRITICAL)
+                # --------------------------------------------------
+
+                change = coin.get("change", 0)
+                volume = coin.get("volume", 0)
+
+                # evita pump finiti
+                if abs(change) > 15:
+                    continue
+
+                # evita bassa liquidità
+                if volume < 2_000_000:
+                    continue
+
+                # --------------------------------------------------
+                # MARKET DATA
+                # --------------------------------------------------
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 100, "futures")
                 if not ohlcv:
@@ -309,18 +349,67 @@ class TradingBot:
 
                 df = ohlcv_to_df(ohlcv)
 
+                signal = None
+
+                # --------------------------------------------------
+                # STRATEGY LOOP
+                # --------------------------------------------------
+
                 for strat in self.strategies:
 
-                    signal = strat.analyze(df, symbol, "futures")
+                    try:
+                        signal = strat.analyze(df, symbol, "futures")
+                        if signal:
+                            break
+                    except Exception as e:
+                        logger.debug(f"[STRAT ERROR] {e}")
 
-                    if signal:
-                        logger.info(f"[SIGNAL] {symbol}")
-                        self._execute_signal(signal)
-                        break
+                # --------------------------------------------------
+                # 🔥 SNIPER FALLBACK (MOMENTUM ENGINE)
+                # --------------------------------------------------
+
+                if not signal:
+
+                    last = df["close"].iloc[-1]
+                    ma5 = df["close"].rolling(5).mean().iloc[-1]
+                    ma10 = df["close"].rolling(10).mean().iloc[-1]
+
+                    # LONG
+                    if last > ma5 > ma10:
+
+                        signal = type("Signal", (), {
+                            "symbol": symbol,
+                            "side": "buy",
+                            "strategy": "sniper_momentum",
+                            "confidence": 0.6
+                        })()
+
+                    # SHORT
+                    elif last < ma5 < ma10:
+
+                        signal = type("Signal", (), {
+                            "symbol": symbol,
+                            "side": "sell",
+                            "strategy": "sniper_momentum",
+                            "confidence": 0.6
+                        })()
+
+                # --------------------------------------------------
+                # EXECUTION
+                # --------------------------------------------------
+
+                if signal:
+
+                    logger.info(f"[SIGNAL] {symbol} ({signal.strategy})")
+
+                    self._execute_signal(signal)
+
+                    # 🔥 evita multi-entry nello stesso ciclo
+                    break
 
         except Exception as e:
-            logger.error(f"[SCALP] {e}")
 
+            logger.error(f"[SCALP] {e}")
 
 # ==========================================================
 # EMERGING
