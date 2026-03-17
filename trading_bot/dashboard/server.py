@@ -455,14 +455,27 @@ async def sync_bitget():
 
 # ── Helpers DB per sync ──────────────────────────────────────────────────────
 
+# Shared engine for sync operations — avoids creating a new engine per call
+_sync_engine = None
+
+def _get_sync_engine():
+    global _sync_engine
+    if _sync_engine is None:
+        from trading_bot.config import settings as S
+        if not S.DATABASE_URL:
+            return None
+        from sqlalchemy import create_engine
+        _sync_engine = create_engine(S.DATABASE_URL, pool_pre_ping=True, pool_size=2, max_overflow=3)
+    return _sync_engine
+
+
 def _sync_close_db_trade(symbol: str, reason: str):
     """Chiude un trade nel DB (tabella trades) marcandolo come closed."""
     try:
-        from trading_bot.config import settings as S
-        if not S.DATABASE_URL:
+        engine = _get_sync_engine()
+        if not engine:
             return
-        from sqlalchemy import create_engine, text
-        engine = create_engine(S.DATABASE_URL, pool_pre_ping=True)
+        from sqlalchemy import text
         with engine.connect() as conn:
             conn.execute(text("""
                 UPDATE trades SET status = 'closed', close_reason = :reason,
@@ -479,11 +492,10 @@ def _sync_close_db_trade(symbol: str, reason: str):
 def _sync_open_db_trade(p: dict, market: str):
     """Inserisce un trade nel DB dalla posizione Bitget futures."""
     try:
-        from trading_bot.config import settings as S
-        if not S.DATABASE_URL:
+        engine = _get_sync_engine()
+        if not engine:
             return
-        from sqlalchemy import create_engine, text
-        engine = create_engine(S.DATABASE_URL, pool_pre_ping=True)
+        from sqlalchemy import text
         with engine.connect() as conn:
             conn.execute(text("""
                 INSERT INTO trades (order_id, symbol, market, strategy, side, status,
@@ -509,11 +521,10 @@ def _sync_open_db_trade(p: dict, market: str):
 def _sync_open_db_trade_spot(s: dict):
     """Inserisce un trade spot nel DB dal balance Bitget."""
     try:
-        from trading_bot.config import settings as S
-        if not S.DATABASE_URL:
+        engine = _get_sync_engine()
+        if not engine:
             return
-        from sqlalchemy import create_engine, text
-        engine = create_engine(S.DATABASE_URL, pool_pre_ping=True)
+        from sqlalchemy import text
         sym = f"{s['asset']}/USDT"
         with engine.connect() as conn:
             conn.execute(text("""
@@ -537,11 +548,10 @@ def _sync_open_db_trade_spot(s: dict):
 def _sync_update_db_trade(symbol: str, entry: float, size: float, market: str):
     """Aggiorna entry_price e size nel DB con i valori reali di Bitget."""
     try:
-        from trading_bot.config import settings as S
-        if not S.DATABASE_URL:
+        engine = _get_sync_engine()
+        if not engine:
             return
-        from sqlalchemy import create_engine, text
-        engine = create_engine(S.DATABASE_URL, pool_pre_ping=True)
+        from sqlalchemy import text
         with engine.connect() as conn:
             conn.execute(text("""
                 UPDATE trades SET entry_price = :entry, size = :size

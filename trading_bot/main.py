@@ -7,6 +7,7 @@ import os
 import time
 import schedule
 import threading
+from collections import deque
 
 from datetime import datetime
 from loguru import logger
@@ -105,7 +106,7 @@ class TradingBot:
             "signals": [],
             "positions": [],
             "sentiment": {},
-            "logs": []
+            "logs": deque(maxlen=100)
         }
 
 
@@ -158,7 +159,6 @@ class TradingBot:
 
         def _dash_log(msg):
             self.runtime["logs"].append(msg.record["message"])
-            self.runtime["logs"] = self.runtime["logs"][-100:]
 
         logger.add(_dash_log, level="INFO")
 
@@ -583,7 +583,16 @@ class TradingBot:
             exchange_positions = self.exchange.fetch_positions()
             active_symbols = {p.get("symbol") for p in exchange_positions}
 
-            for trade in self.risk.all_open_trades():
+            open_trades = self.risk.all_open_trades()
+
+            # --------------------------------------------------
+            # BATCH FETCH TICKERS (1 API call instead of N)
+            # --------------------------------------------------
+
+            trade_symbols = [t["symbol"] for t in open_trades if t["symbol"] in active_symbols]
+            tickers = self.exchange.fetch_tickers_batch(trade_symbols, "futures") if trade_symbols else {}
+
+            for trade in open_trades:
 
                 symbol = trade["symbol"]
 
@@ -595,10 +604,10 @@ class TradingBot:
                     continue
 
                 # --------------------------------------------------
-                # FETCH PREZZO
+                # GET PREZZO FROM BATCH
                 # --------------------------------------------------
 
-                ticker = self.exchange.fetch_ticker(symbol, "futures")
+                ticker = tickers.get(symbol)
                 if not ticker:
                     continue
 
@@ -618,7 +627,7 @@ class TradingBot:
                 # --------------------------------------------------
 
                 if action == "force_close":
-                    self._close_position(trade, price, "force_exit")
+                    self._close_position(trade, price, "force_exit", exchange_positions)
                     continue
 
                 # --------------------------------------------------
@@ -663,10 +672,10 @@ class TradingBot:
 
                 # fallback sicurezza
                 if pnl_pct > 4:
-                    self._close_position(trade, price, "hard_tp")
+                    self._close_position(trade, price, "hard_tp", exchange_positions)
 
                 elif pnl_pct < -2:
-                    self._close_position(trade, price, "hard_sl")
+                    self._close_position(trade, price, "hard_sl", exchange_positions)
 
         except Exception as e:
 
@@ -677,7 +686,7 @@ class TradingBot:
 # CLOSE
 # ==========================================================
 
-    def _close_position(self, trade, price, reason):
+    def _close_position(self, trade, price, reason, cached_positions=None):
 
         try:
 
@@ -685,10 +694,10 @@ class TradingBot:
             side = "sell" if trade["side"] == "buy" else "buy"
 
             # ==================================================
-            # 🔥 FETCH REAL POSITION (ROBUST)
+            # 🔥 FETCH REAL POSITION (ROBUST) — reuse cached if available
             # ==================================================
 
-            positions = self.exchange.fetch_positions()
+            positions = cached_positions or self.exchange.fetch_positions()
 
             real_size = 0
 

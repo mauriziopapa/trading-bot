@@ -1,3 +1,6 @@
+import time
+
+
 class ProfitEngine:
 
     def __init__(self):
@@ -76,7 +79,6 @@ class ProfitEngine:
 
         if created:
 
-            import time
             age = time.time() - created
 
             # 15 min senza movimento → chiudi

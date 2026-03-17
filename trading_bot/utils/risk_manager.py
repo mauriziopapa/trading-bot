@@ -5,6 +5,7 @@ Production ready + trailing + session protection
 
 import time
 import threading
+from collections import deque
 from loguru import logger
 from trading_bot.config import settings
 
@@ -38,8 +39,7 @@ class RiskManager:
         self.wins = 0
         self.losses = 0
 
-        self._recent_pnls = []
-        self._recent_limit = 100
+        self._recent_pnls = deque(maxlen=100)
 
         self.db = None
 
@@ -281,9 +281,6 @@ class RiskManager:
                 self.losses += 1
 
             self._recent_pnls.append(pnl_pct)
-
-            if len(self._recent_pnls) > self._recent_limit:
-                self._recent_pnls.pop(0)
 
             if market == "spot":
                 self.open_spot.pop(symbol, None)
