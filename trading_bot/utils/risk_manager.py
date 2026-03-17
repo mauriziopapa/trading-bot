@@ -73,6 +73,55 @@ class RiskManager:
         if balance > self.peak_balance:
             self.peak_balance = balance
 
+# ==========================================================
+# RECOVERY FROM DB (COMPATIBILITY FIX)
+# ==========================================================
+
+    def recover_from_db(self):
+
+        try:
+
+            if not self.db:
+                logger.info("[RISK] DB non collegato — skip recovery")
+                return
+
+            if not hasattr(self.db, "get_open_trades"):
+                logger.warning("[RISK] DB missing get_open_trades")
+                return
+
+            trades = self.db.get_open_trades()
+
+            if not trades:
+                logger.info("[RISK] recovered 0 open trades")
+                return
+
+            for t in trades:
+
+                symbol = t.get("symbol")
+                market = t.get("market", "futures")
+
+                trade_data = {
+                    "symbol": symbol,
+                    "side": t.get("side"),
+                    "entry": safe_float(t.get("entry")),
+                    "size": safe_float(t.get("size")),
+                    "stop_loss": safe_float(t.get("stop_loss")),
+                    "take_profit": safe_float(t.get("take_profit")),
+                    "created_at": t.get("created_at", time.time())
+                }
+
+                if market == "spot":
+                    self.open_spot[symbol] = trade_data
+                else:
+                    self.open_futures[symbol] = trade_data
+
+            logger.info(f"[RISK] recovered {len(trades)} open trades")
+
+        except Exception as e:
+
+            logger.error(f"[RISK] recover_from_db error {e}")
+
+
 
 # ==========================================================
 # GLOBAL RISK CONTROL (NEW)
