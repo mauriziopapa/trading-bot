@@ -102,6 +102,7 @@ class TradingBot:
             self._start_dashboard()
 
         self.exchange.initialize()
+        self._recover_positions_from_exchange()
         self.db.connect()
 
         self.risk.db = self.db
@@ -242,6 +243,56 @@ class TradingBot:
 
 
 # ==========================================================
+# RECOVERY POSITION
+# ==========================================================
+
+    def _recover_positions_from_exchange(self):
+
+        try:
+
+            positions = self.exchange.fetch_positions()
+
+            if not positions:
+                logger.info("[RECOVERY] no open positions on exchange")
+                return
+
+            recovered = 0
+
+            for p in positions:
+
+                symbol = p.get("symbol")
+                contracts = safe_float(p.get("contracts"))
+                entry = safe_float(p.get("entryPrice"))
+
+                if contracts <= 0 or entry <= 0:
+                    continue
+
+                side = "buy" if p.get("side") == "long" else "sell"
+
+                trade = {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry": entry,
+                    "size": contracts,
+                    "stop_loss": entry * 0.98,
+                    "take_profit": entry * 1.02,
+                    "created_at": time.time() - 120,  # evita hold block
+                    "market": "futures"
+                }
+
+                self.risk.register_open(symbol, trade, "futures")
+
+                recovered += 1
+
+                logger.info(f"[RECOVERY] restored {symbol} {side} size={contracts}")
+
+            logger.info(f"[RECOVERY] total recovered: {recovered}")
+
+        except Exception as e:
+            logger.error(f"[RECOVERY] error {e}")
+
+
+# ==========================================================
 # SCHEDULER
 # ==========================================================
 
@@ -376,6 +427,15 @@ class TradingBot:
                 "market": "futures"
             }
 
+            self.db.insert_trade({
+                "symbol": symbol,
+                "side": side,
+                "entry": price,
+                "size": size,
+                "status": "open",
+                "created_at": int(time.time())
+            })
+
             self.risk.register_open(symbol, trade, "futures")
 
             self.notifier.trade_opened(
@@ -453,7 +513,8 @@ class TradingBot:
             reason=reason,
             market="futures"
         )
-
+        
+        self.db.update_trade_status(symbol, "closed")
         logger.info(f"[CLOSE] {symbol}")
 
 
