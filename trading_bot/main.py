@@ -297,7 +297,8 @@ class TradingBot:
             return False
 
         # 2. Global risk gate — max positions, global stop, pending lock
-        if not self.risk.can_trade(symbol):
+        balance = safe_float(self.exchange.get_usdt_balance("futures"))
+        if not self.risk.can_trade(symbol, available_balance=balance):
             logger.info(f"[GUARD] {symbol} blocked by risk gate")
             return False
 
@@ -320,9 +321,10 @@ class TradingBot:
         try:
 
             # ==================================================
-            # 🔥 RISK GATE
+            # RISK GATE — with balance override
             # ==================================================
-            if hasattr(self.risk, "can_trade") and not self.risk.can_trade():
+            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+            if not self.risk.can_trade(available_balance=balance):
                 logger.info("[SKIP] Risk gate blocked trading")
                 return
 
@@ -457,9 +459,10 @@ class TradingBot:
         try:
 
             # ==================================================
-            # RISK GATE — same as scalping
+            # RISK GATE — with balance override
             # ==================================================
-            if not self.risk.can_trade():
+            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+            if not self.risk.can_trade(available_balance=balance):
                 logger.info("[SKIP] Emerging blocked by risk gate")
                 return
 
@@ -695,6 +698,12 @@ class TradingBot:
 
             active_symbols = {p.get("symbol") for p in exchange_positions}
             open_trades = self.risk.all_open_trades()
+
+            logger.info(
+                f"[MONITOR] exchange_positions={len(exchange_positions)} "
+                f"risk_positions={len(self.risk.open_futures)} "
+                f"symbols={list(self.risk.open_futures.keys())}"
+            )
 
             # --------------------------------------------------
             # BATCH FETCH TICKERS (1 API call instead of N)

@@ -99,16 +99,40 @@ class RiskManager:
 
         try:
             # Build map of exchange positions: symbol -> position data
+            # Handles hedge mode: Bitget can return separate long+short per symbol
             exchange_map = {}
             for p in exchange_positions:
                 size = safe_float(p.get("contracts"))
                 if size <= 0:
                     continue
                 symbol = p.get("symbol", "")
+                side_raw = p.get("side", "")  # "long" or "short"
+                entry = safe_float(p.get("entryPrice"))
+
+                if symbol in exchange_map:
+                    existing = exchange_map[symbol]
+                    if existing["side"] != side_raw:
+                        # Opposite sides (hedge) — net them
+                        if size > existing["size"]:
+                            exchange_map[symbol] = {
+                                "side": side_raw,
+                                "size": size - existing["size"],
+                                "entry": entry,
+                            }
+                        elif size < existing["size"]:
+                            existing["size"] -= size
+                        else:
+                            # Fully hedged (net zero) — not a real position
+                            del exchange_map[symbol]
+                    else:
+                        # Same side — sum sizes
+                        existing["size"] += size
+                    continue
+
                 exchange_map[symbol] = {
-                    "side": p.get("side", ""),  # "long" or "short"
+                    "side": side_raw,
                     "size": size,
-                    "entry": safe_float(p.get("entryPrice")),
+                    "entry": entry,
                 }
 
             with self._lock:
@@ -180,24 +204,50 @@ class RiskManager:
 # GLOBAL RISK CONTROL (NEW)
 # ==========================================================
 
-    def can_trade(self, symbol=None):
+    def can_trade(self, symbol=None, available_balance=None):
         """
-        Global risk gate. If symbol is provided, also checks:
-        - symbol not already open
-        - symbol not pending (being executed)
+        Global risk gate with balance-based override.
+        Counts unique active symbols (not raw position entries).
         """
 
         if self.global_stop:
+            logger.info("[RISK] can_trade=False reason=global_stop")
             return False
 
         with self._lock:
-            if len(self.open_futures) >= self.max_concurrent_trades:
-                return False
+            active_count = len(self.open_futures)
+            min_trade_balance = 10  # minimum USDT to place any trade
+
+            logger.debug(
+                f"[RISK] active_symbols={active_count} "
+                f"max={self.max_concurrent_trades} "
+                f"open={list(self.open_futures.keys())} "
+                f"balance={available_balance}"
+            )
+
+            # Balance-based override: allow more positions if margin available
+            if available_balance is not None and available_balance > min_trade_balance:
+                hard_max = max(self.max_concurrent_trades, 3)
+                if active_count >= hard_max:
+                    logger.info(
+                        f"[RISK] can_trade=False reason=hard_max({hard_max}) "
+                        f"active={active_count}"
+                    )
+                    return False
+            else:
+                if active_count >= self.max_concurrent_trades:
+                    logger.info(
+                        f"[RISK] can_trade=False reason=max_positions({self.max_concurrent_trades}) "
+                        f"active={active_count} balance={available_balance}"
+                    )
+                    return False
 
             if symbol:
                 if symbol in self.open_futures or symbol in self.open_spot:
+                    logger.info(f"[RISK] can_trade=False reason=symbol_open({symbol})")
                     return False
                 if symbol in self._pending_symbols:
+                    logger.info(f"[RISK] can_trade=False reason=symbol_pending({symbol})")
                     return False
 
         return True
@@ -210,10 +260,16 @@ class RiskManager:
 
 
     def check_global_risk(self, balance):
+        balance = safe_float(balance)
+        if self.peak_balance <= 0 or balance <= 0:
+            return True
 
-        if self.drawdown_exceeded(balance):
+        drawdown = (self.peak_balance - balance) / self.peak_balance * 100
+        max_dd = safe_float(getattr(settings, "MAX_DRAWDOWN_PCT", 20))
+
+        if drawdown > max_dd:
             self.global_stop = True
-            logger.error("[RISK] GLOBAL STOP ACTIVATED")
+            logger.error(f"[RISK] GLOBAL STOP — drawdown {drawdown:.1f}% > max {max_dd}%")
             return False
 
         return True
