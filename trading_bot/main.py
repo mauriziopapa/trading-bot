@@ -1,6 +1,6 @@
 """
-Bitget Trading Bot — Main Orchestrator v9.0
-PROFIT MODE + FULL SYNC + DASHBOARD FIX + TELEGRAM
+Bitget Trading Bot — Main Orchestrator v10 SNIPER MODE
+Production Ready + Safe Execution + Anti Overtrading + Asset Filtering
 """
 
 import os
@@ -74,13 +74,28 @@ class TradingBot:
         self._recent_signals = []
 
         self.sentiment = {}
-        self.active_strategy = "AUTO"
+        self.active_strategy = "SNIPER"
         self._running = True
 
-        self.max_concurrent_trades = 3  # 🔥 anti overtrading
+        # 🔥 CONTROLLO TRADING
+        self.max_concurrent_trades = 2
+        self.last_trade_time = {}
+        self.cooldown_seconds = 120
+
+        # 🔥 SOLO ASSET REALI
+        self.allowed_symbols = [
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "LINK/USDT:USDT",
+            "MATIC/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT"
+        ]
 
         self.strategies = [
-            ScalpingStrategy(),   # priorità
+            ScalpingStrategy(),
             BreakoutStrategy(),
             RSIMACDStrategy(),
             BollingerStrategy()
@@ -103,7 +118,7 @@ class TradingBot:
         self._setup_logger()
 
         logger.info("════════════════════════════════════")
-        logger.info("BITGET TRADING BOT v9.0 PROFIT MODE")
+        logger.info("BITGET TRADING BOT v10 SNIPER MODE")
         logger.info("════════════════════════════════════")
 
         if DASHBOARD_ENABLED:
@@ -197,7 +212,7 @@ class TradingBot:
 
 
 # ==========================================================
-# RECOVERY (FIXED)
+# RECOVERY
 # ==========================================================
 
     def _recover_positions_from_exchange(self):
@@ -221,19 +236,13 @@ class TradingBot:
                     "side": side,
                     "entry": entry,
                     "size": size,
-                    "stop_loss": entry * 0.98,
-                    "take_profit": entry * 1.02,
+                    "stop_loss": entry * 0.97,
+                    "take_profit": entry * 1.04,
                     "created_at": time.time() - 60,
                     "market": "futures"
                 }
 
                 self.risk.register_open(symbol, trade, "futures")
-
-                if hasattr(self.db, "insert_trade"):
-                    try:
-                        self.db.insert_trade(trade)
-                    except:
-                        pass
 
                 logger.info(f"[RECOVERY] {symbol} restored")
 
@@ -257,22 +266,42 @@ class TradingBot:
 
 
 # ==========================================================
-# SCALPING (PROFIT MODE)
+# VALIDATION
+# ==========================================================
+
+    def _is_valid_trade(self, symbol):
+
+        if symbol not in self.allowed_symbols:
+            return False
+
+        now = time.time()
+        last = self.last_trade_time.get(symbol, 0)
+
+        if now - last < self.cooldown_seconds:
+            return False
+
+        if len(self.risk.all_open_trades()) >= self.max_concurrent_trades:
+            return False
+
+        return True
+
+
+# ==========================================================
+# SCALPING
 # ==========================================================
 
     def _scan_scalping(self):
 
         try:
 
-            if len(self.risk.all_open_trades()) >= self.max_concurrent_trades:
-                return
-
             coins = self._emerging.scan() or []
-            self.runtime["signals"] = coins[:5]
 
             for coin in coins[:3]:
 
                 symbol = f"{coin['symbol']}/USDT:USDT"
+
+                if symbol not in self.allowed_symbols:
+                    continue
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "1m", 100, "futures")
                 if not ohlcv:
@@ -280,53 +309,38 @@ class TradingBot:
 
                 df = ohlcv_to_df(ohlcv)
 
-                signal = None
-
                 for strat in self.strategies:
 
                     signal = strat.analyze(df, symbol, "futures")
 
                     if signal:
+                        logger.info(f"[SIGNAL] {symbol}")
+                        self._execute_signal(signal)
                         break
-
-                # 🔥 fallback intelligente (trend momentum)
-                if not signal:
-                    if df["close"].iloc[-1] > df["close"].rolling(5).mean().iloc[-1]:
-                        signal = type("Signal", (), {
-                            "symbol": symbol,
-                            "side": "buy",
-                            "strategy": "momentum",
-                            "confidence": 0.6
-                        })()
-
-                if signal:
-                    logger.info(f"[SIGNAL] {symbol}")
-                    self._execute_signal(signal)
 
         except Exception as e:
             logger.error(f"[SCALP] {e}")
 
 
 # ==========================================================
-# SCAN MERGING
+# EMERGING
 # ==========================================================
 
     def _scan_emerging(self):
 
         try:
 
-            if len(self.risk.all_open_trades()) >= self.max_concurrent_trades:
-                return
-
             coins = self._emerging.scan() or []
 
             for coin in coins[:3]:
 
-                # 🔥 filtro qualità
                 if coin.get("volume", 0) < 10_000_000:
                     continue
 
                 symbol = f"{coin['symbol']}/USDT:USDT"
+
+                if symbol not in self.allowed_symbols:
+                    continue
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "5m", 120, "futures")
                 if not ohlcv:
@@ -334,29 +348,18 @@ class TradingBot:
 
                 df = ohlcv_to_df(ohlcv)
 
-                signal = None
-
                 for strat in self.strategies:
+
                     signal = strat.analyze(df, symbol, "futures")
+
                     if signal:
+                        logger.info(f"[EMERGING SIGNAL] {symbol}")
+                        self._execute_signal(signal)
                         break
-
-                # 🔥 fallback trend forte
-                if not signal:
-                    if df["close"].iloc[-1] > df["close"].rolling(10).mean().iloc[-1]:
-                        signal = type("Signal", (), {
-                            "symbol": symbol,
-                            "side": "buy",
-                            "strategy": "emerging_trend",
-                            "confidence": 0.7
-                        })()
-
-                if signal:
-                    logger.info(f"[EMERGING SIGNAL] {symbol}")
-                    self._execute_signal(signal)
 
         except Exception as e:
             logger.error(f"[EMERGING] {e}")
+
 
 # ==========================================================
 # EXECUTE
@@ -369,15 +372,26 @@ class TradingBot:
             symbol = signal.symbol
             side = signal.side
 
+            if not self._is_valid_trade(symbol):
+                return
+
             ticker = self.exchange.fetch_ticker(symbol, "futures")
+            if not ticker:
+                return
+
             price = safe_float(ticker.get("last"))
+            if price <= 0:
+                return
 
             balance = safe_float(self.exchange.get_usdt_balance("futures"))
 
-            size = safe_float((balance * 0.15) / price)  # 🔥 più aggressivo
+            risk_capital = balance * 0.02
+            size = safe_float(risk_capital / price)
+
+            if size * price < 20:
+                return
 
             order = self.exchange.create_market_order(symbol, side, size, "futures")
-
             if not order:
                 return
 
@@ -386,23 +400,28 @@ class TradingBot:
                 "side": side,
                 "entry": price,
                 "size": size,
-                "stop_loss": price * 0.985,
-                "take_profit": price * 1.015,
+                "stop_loss": price * 0.97,
+                "take_profit": price * 1.04,
                 "created_at": time.time(),
                 "market": "futures"
             }
 
             self.risk.register_open(symbol, trade, "futures")
+            self.last_trade_time[symbol] = time.time()
 
             self.notifier.trade_opened(
                 symbol=symbol,
                 side=side,
                 entry=price,
                 size=size,
+                stop_loss=trade["stop_loss"],
+                take_profit=trade["take_profit"],
                 market="futures",
-                strategy=getattr(signal, "strategy", "auto"),
-                confidence=getattr(signal, "confidence", 0.5)
+                strategy=getattr(signal, "strategy", "sniper"),
+                confidence=getattr(signal, "confidence", 0.7)
             )
+
+            logger.info(f"[TRADE OPEN] {symbol}")
 
         except Exception as e:
             logger.error(f"[TRADE] {e}")
@@ -417,16 +436,22 @@ class TradingBot:
         for trade in self.risk.all_open_trades():
 
             ticker = self.exchange.fetch_ticker(trade["symbol"], "futures")
+            if not ticker:
+                continue
+
             price = safe_float(ticker.get("last"))
 
             pnl_pct = (price - trade["entry"]) / trade["entry"] * 100
 
-            if pnl_pct > 1.5 or pnl_pct < -1:
-                self._close_position(trade, price, "target_hit")
+            if pnl_pct > 3:
+                self._close_position(trade, price, "take_profit")
+
+            elif pnl_pct < -2:
+                self._close_position(trade, price, "stop_loss")
 
 
 # ==========================================================
-# CLOSE (FIXED PNL)
+# CLOSE
 # ==========================================================
 
     def _close_position(self, trade, price, reason):

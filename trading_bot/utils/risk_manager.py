@@ -1,7 +1,6 @@
 """
-Risk Manager v7.5
-Production hardened version
-Safe against None / bad signals / execution errors
+Risk Manager v8.0 SNIPER HARDENED
+Production ready + trailing + session protection
 """
 
 import time
@@ -16,10 +15,8 @@ from trading_bot.config import settings
 
 def safe_float(x, default=0.0):
     try:
-        if x is None:
-            return default
-        return float(x)
-    except Exception:
+        return float(x) if x is not None else default
+    except:
         return default
 
 
@@ -45,6 +42,10 @@ class RiskManager:
         self._recent_limit = 100
 
         self.db = None
+
+        # 🔥 NEW
+        self.max_concurrent_trades = 2
+        self.global_stop = False
 
 
 # ==========================================================
@@ -74,34 +75,32 @@ class RiskManager:
 
 
 # ==========================================================
-# DRAWDOWN
+# GLOBAL RISK CONTROL (NEW)
 # ==========================================================
 
-    def drawdown_exceeded(self, balance):
+    def can_trade(self):
 
-        try:
-
-            balance = safe_float(balance)
-
-            if self.peak_balance <= 0:
-                self.peak_balance = balance
-                return False
-
-            if balance > self.peak_balance:
-                self.peak_balance = balance
-
-            dd = ((self.peak_balance - balance) / self.peak_balance) * 100
-
-            return dd > settings.MAX_DRAWDOWN_PCT
-
-        except Exception as e:
-
-            logger.error(f"[RISK] drawdown error {e}")
+        if self.global_stop:
             return False
 
+        if len(self.open_futures) >= self.max_concurrent_trades:
+            return False
+
+        return True
+
+
+    def check_global_risk(self, balance):
+
+        if self.drawdown_exceeded(balance):
+            self.global_stop = True
+            logger.error("[RISK] GLOBAL STOP ACTIVATED")
+            return False
+
+        return True
+
 
 # ==========================================================
-# POSITION SIZE (HARDENED)
+# POSITION SIZE
 # ==========================================================
 
     def position_size(self, balance, entry, stop_loss, atr=None, market="spot", symbol=""):
@@ -111,37 +110,27 @@ class RiskManager:
             balance = safe_float(balance)
             entry = safe_float(entry)
             stop_loss = safe_float(stop_loss)
-            atr = safe_float(atr)
 
             if balance <= 0 or entry <= 0:
                 return 0
-
-            # fallback stop_loss se mancante
-            if stop_loss <= 0 or stop_loss == entry:
-                stop_loss = entry * 0.98 if entry > 0 else entry
 
             risk_pct = safe_float(settings.MAX_RISK_PCT) / 100
             risk_amount = balance * risk_pct
 
             risk_per_unit = abs(entry - stop_loss)
 
-            # fallback se troppo piccolo
             if risk_per_unit <= 0:
                 risk_per_unit = entry * 0.01
 
             size = risk_amount / risk_per_unit
 
-            # cap notional
             max_notional = balance * (safe_float(settings.MAX_NOTIONAL_PCT) / 100)
 
             if size * entry > max_notional:
                 size = max_notional / entry
 
-            # minimum trade size
-            min_notional = 5
-
-            if size * entry < min_notional:
-                size = min_notional / entry
+            if size * entry < 20:
+                return 0
 
             return round(size, 6)
 
@@ -152,83 +141,41 @@ class RiskManager:
 
 
 # ==========================================================
-# RECOVERY
+# TRAILING STOP (NEW)
 # ==========================================================
 
-    def recover_from_db(self):
+    def apply_trailing(self, trade, price):
 
         try:
 
-            if not self.db:
+            entry = safe_float(trade.get("entry"))
+            stop = safe_float(trade.get("stop_loss"))
+            side = trade.get("side")
 
-                logger.info("[RISK] DB non collegato — skip recovery")
-                return
+            if entry <= 0 or price <= 0:
+                return trade
 
-            trades = self.db.get_open_trades()
+            profit_pct = (price - entry) / entry * 100
 
-            if not trades:
+            if side == "sell":
+                profit_pct = -profit_pct
 
-                logger.info("[RISK] recovered 0 open trades")
-                return
+            # trailing attivo sopra 1.5%
+            if profit_pct > 1.5:
 
-            for t in trades:
+                new_stop = price * 0.99
 
-                symbol = t.get("symbol")
-                market = t.get("market", "spot")
-
-                trade_data = {
-
-                    "order_id": t.get("order_id"),
-                    "side": t.get("side"),
-                    "entry": safe_float(t.get("entry")),
-                    "size": safe_float(t.get("size")),
-                    "stop_loss": safe_float(t.get("stop_loss")),
-                    "take_profit": safe_float(t.get("take_profit")),
-                    "atr": safe_float(t.get("atr"))
-                }
-
-                if market == "spot":
-                    self.open_spot[symbol] = trade_data
+                if side == "buy":
+                    trade["stop_loss"] = max(stop, new_stop)
                 else:
-                    self.open_futures[symbol] = trade_data
+                    trade["stop_loss"] = min(stop, new_stop)
 
-            logger.info(f"[RISK] recovered {len(trades)} open trades")
+            return trade
 
         except Exception as e:
 
-            logger.error(f"[RISK] recover_from_db error {e}")
-
-
-# ==========================================================
-# LEVERAGE
-# ==========================================================
-
-    def dynamic_leverage(self, atr, entry):
-
-        try:
-
-            atr = safe_float(atr)
-            entry = safe_float(entry)
-
-            if atr <= 0 or entry <= 0:
-                return settings.DEFAULT_LEVERAGE
-
-            vol = atr / entry
-
-            if vol < 0.01:
-                return 10
-
-            if vol < 0.02:
-                return 8
-
-            if vol < 0.04:
-                return 6
-
-            return 5
-
-        except Exception:
-
-            return settings.DEFAULT_LEVERAGE
+            logger.error(f"[RISK] trailing error {e}")
+            return trade
 
 
 # ==========================================================
@@ -249,7 +196,6 @@ class RiskManager:
     def release_symbol(self, symbol):
 
         with self._lock:
-
             self._pending_symbols.discard(symbol)
 
 
@@ -260,6 +206,9 @@ class RiskManager:
     def register_open(self, symbol, trade, market):
 
         try:
+
+            if symbol in self.open_futures:
+                return  # 🔥 anti duplicate
 
             if market == "spot":
                 self.open_spot[symbol] = trade
@@ -325,12 +274,14 @@ class RiskManager:
 
 
 # ==========================================================
-# CLOSE CONDITIONS (SAFE)
+# CLOSE CONDITIONS (ENHANCED)
 # ==========================================================
 
     def should_close(self, trade, price):
 
         try:
+
+            trade = self.apply_trailing(trade, price)
 
             entry = safe_float(trade.get("entry"))
             stop = safe_float(trade.get("stop_loss"))
@@ -377,41 +328,3 @@ class RiskManager:
             "wins": self.wins,
             "losses": self.losses
         }
-
-
-# ==========================================================
-# RECENT PERFORMANCE
-# ==========================================================
-
-    def recent_stats(self):
-
-        try:
-
-            if not self._recent_pnls:
-
-                return {
-                    "avg_pnl": 0,
-                    "win_rate": 0,
-                    "trades": 0
-                }
-
-            trades = len(self._recent_pnls)
-            wins = len([p for p in self._recent_pnls if p > 0])
-
-            avg = sum(self._recent_pnls) / trades
-
-            return {
-                "avg_pnl": avg,
-                "win_rate": wins / trades,
-                "trades": trades
-            }
-
-        except Exception as e:
-
-            logger.error(f"[RISK] recent_stats error {e}")
-
-            return {
-                "avg_pnl": 0,
-                "win_rate": 0,
-                "trades": 0
-            }
