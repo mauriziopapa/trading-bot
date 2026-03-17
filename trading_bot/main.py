@@ -433,21 +433,103 @@ class TradingBot:
 
     def _monitor_positions(self):
 
-        for trade in self.risk.all_open_trades():
+        try:
 
-            ticker = self.exchange.fetch_ticker(trade["symbol"], "futures")
-            if not ticker:
-                continue
+            # ==================================================
+            # 🔥 SYNC POSIZIONI REALI EXCHANGE
+            # ==================================================
 
-            price = safe_float(ticker.get("last"))
+            exchange_positions = self.exchange.fetch_positions()
+            active_symbols = {p.get("symbol") for p in exchange_positions}
 
-            pnl_pct = (price - trade["entry"]) / trade["entry"] * 100
+            for trade in self.risk.all_open_trades():
 
-            if pnl_pct > 3:
-                self._close_position(trade, price, "take_profit")
+                symbol = trade["symbol"]
 
-            elif pnl_pct < -2:
-                self._close_position(trade, price, "stop_loss")
+                # --------------------------------------------------
+                # SKIP se posizione non esiste più
+                # --------------------------------------------------
+
+                if symbol not in active_symbols:
+                    continue
+
+                # --------------------------------------------------
+                # FETCH PREZZO
+                # --------------------------------------------------
+
+                ticker = self.exchange.fetch_ticker(symbol, "futures")
+                if not ticker:
+                    continue
+
+                price = safe_float(ticker.get("last"))
+
+                if price <= 0:
+                    continue
+
+                # --------------------------------------------------
+                # 🔥 PROFIT ENGINE (CORE)
+                # --------------------------------------------------
+
+                action = self.profit.update_trade(trade, price)
+
+                # --------------------------------------------------
+                # 🔥 FORCE CLOSE
+                # --------------------------------------------------
+
+                if action == "force_close":
+                    self._close_position(trade, price, "force_exit")
+                    continue
+
+                # --------------------------------------------------
+                # 🔥 PARTIAL CLOSE
+                # --------------------------------------------------
+
+                if action and "partial_close" in action:
+
+                    portion = 0.3 if "30" in action else 0.5 if "50" in action else 0.8
+
+                    size = trade.get("size", 0) * portion
+
+                    if size > 0:
+
+                        order = self.exchange.create_market_order(
+                            symbol,
+                            "sell" if trade["side"] == "buy" else "buy",
+                            size,
+                            "futures"
+                        )
+
+                        if order:
+                            trade["size"] -= size
+
+                            logger.info(f"[PARTIAL] {symbol} {portion*100:.0f}%")
+
+                    continue
+
+                # --------------------------------------------------
+                # 🔥 HARD STOP / TP BACKUP
+                # --------------------------------------------------
+
+                entry = safe_float(trade.get("entry"))
+
+                if entry <= 0:
+                    continue
+
+                pnl_pct = (price - entry) / entry * 100
+
+                if trade["side"] == "sell":
+                    pnl_pct *= -1
+
+                # fallback sicurezza
+                if pnl_pct > 4:
+                    self._close_position(trade, price, "hard_tp")
+
+                elif pnl_pct < -2:
+                    self._close_position(trade, price, "hard_sl")
+
+        except Exception as e:
+
+            logger.error(f"[MONITOR] {e}")
 
 
 # ==========================================================
@@ -462,7 +544,7 @@ class TradingBot:
             side = "sell" if trade["side"] == "buy" else "buy"
 
             # ==================================================
-            # 🔥 REAL SIZE FROM EXCHANGE (CRITICAL FIX)
+            # 🔥 FETCH REAL POSITION (ROBUST)
             # ==================================================
 
             positions = self.exchange.fetch_positions()
@@ -471,65 +553,77 @@ class TradingBot:
 
             for p in positions:
                 if p.get("symbol") == symbol:
-                    real_size = float(p.get("contracts") or 0)
+
+                    # 🔥 usa contracts ma fallback su info
+                    real_size = float(
+                        p.get("contracts")
+                        or p.get("info", {}).get("total")
+                        or 0
+                    )
                     break
 
             if real_size <= 0:
-                logger.warning(f"[CLOSE] no position on exchange {symbol}")
+                logger.warning(f"[CLOSE] no position {symbol}")
                 return
 
             # ==================================================
-            # 🔥 SAFETY BUFFER (avoid precision issues)
+            # 🔥 PRECISION NORMALIZATION
             # ==================================================
 
-            real_size *= 0.98  # evita rejection
+            try:
+                real_size = float(
+                    self.exchange.futures.amount_to_precision(symbol, real_size)
+                )
+            except:
+                pass
 
             # ==================================================
-            # EXECUTE CLOSE
+            # 🔥 SAFE EXECUTION (ANTI REJECTION)
             # ==================================================
 
-            order = self.exchange.create_market_order(
-                symbol,
-                side,
-                real_size,
-                "futures"
-            )
+            for attempt in [1.0, 0.95, 0.90, 0.85]:
 
-            if not order:
-                logger.error(f"[CLOSE] failed {symbol}")
+                size = real_size * attempt
+
+                if size <= 0:
+                    continue
+
+                order = self.exchange.create_market_order(
+                    symbol,
+                    side,
+                    size,
+                    "futures"
+                )
+
+                if order:
+                    break
+            else:
+                logger.error(f"[CLOSE] failed after retries {symbol}")
                 return
 
             # ==================================================
-            # PNL CALC
+            # PNL
             # ==================================================
 
             entry = trade.get("entry", 0)
-            pnl_pct = ((price - entry) / entry) * 100
 
+            pnl_pct = ((price - entry) / entry) * 100
             if trade["side"] == "sell":
                 pnl_pct *= -1
 
-            pnl_usdt = pnl_pct * real_size
+            pnl_usdt = pnl_pct * size
 
             # ==================================================
-            # UPDATE RISK
+            # UPDATE STATE
             # ==================================================
 
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
-
-            # ==================================================
-            # DB SYNC
-            # ==================================================
 
             if hasattr(self.db, "update_trade_status"):
                 try:
                     self.db.update_trade_status(symbol, "closed")
                 except:
                     pass
-
-            # ==================================================
-            # NOTIFY
-            # ==================================================
 
             self.notifier.trade_closed(
                 symbol=symbol,
