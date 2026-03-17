@@ -492,12 +492,44 @@ class TradingBot:
 
             balance = safe_float(self.exchange.get_usdt_balance("futures"))
 
-            risk_capital = balance * 0.02
-            size = safe_float(risk_capital / price)
+            # ==================================================
+            # 🔥 CONFIG
+            # ==================================================
+            leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
+            min_notional = 10  # soglia reale exchange
 
-            if size * price < 20:
-                logger.info(f"[BLOCKED SIZE] {symbol} value={size * price}")
-                return
+            # ==================================================
+            # 🔥 RISK CAPITAL (BASE)
+            # ==================================================
+            risk_pct = 0.02
+            risk_capital = balance * risk_pct
+
+            # ==================================================
+            # 🔥 APPLY LEVERAGE
+            # ==================================================
+            notional = risk_capital * leverage
+
+            # ==================================================
+            # 🔥 ENFORCE MIN NOTIONAL
+            # ==================================================
+            if notional < min_notional:
+                logger.warning(
+                    f"[SIZE BOOST] {symbol} notional too low ({notional:.2f}) → forcing {min_notional}"
+                )
+                notional = min_notional
+
+            # ==================================================
+            # 🔥 FINAL SIZE
+            # ==================================================
+            size = safe_float(notional / price)
+
+            # ==================================================
+            # 🔥 SAFETY LOG
+            # ==================================================
+            logger.info(
+                f"[SIZE] {symbol} balance={balance:.2f} risk={risk_capital:.2f} "
+                f"lev={leverage} notional={notional:.2f} size={size}"
+            )
 
             order = self.exchange.create_market_order(symbol, side, size, "futures")
             if not order:
