@@ -27,6 +27,7 @@ Cache 15 minuti — aggiornato automaticamente ogni ciclo.
 
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 from trading_bot.config import settings
 
@@ -164,8 +165,23 @@ class SentimentAnalyzer:
         sources: list[dict] = []
         sub: dict[str, float] = {}
 
+        # ── Parallel fetch all 6 sources ─────────────────────────────────
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            fut_fg      = pool.submit(self._fetch_fear_greed)
+            fut_funding = pool.submit(self._fetch_funding_rates)
+            fut_ls      = pool.submit(self._fetch_ls_ratio)
+            fut_trend   = pool.submit(self._fetch_coingecko_trending)
+            fut_news    = pool.submit(self._fetch_cryptopanic_news)
+            fut_oi      = pool.submit(self._fetch_oi_delta)
+
+        fg          = fut_fg.result()
+        funding     = fut_funding.result()
+        ls          = fut_ls.result()
+        trending    = fut_trend.result()
+        news        = fut_news.result()
+        oi          = fut_oi.result()
+
         # ── ① Fear & Greed ────────────────────────────────────────────────
-        fg          = self._fetch_fear_greed()
         fg_score    = fg.get("value", 50)
         fg_label    = fg.get("value_classification", "Neutral")
         sub["fear_greed"] = float(fg_score)
@@ -194,7 +210,6 @@ class SentimentAnalyzer:
         })
 
         # ── ② Funding Rate ────────────────────────────────────────────────
-        funding     = self._fetch_funding_rates()
         funding_btc = funding.get("BTC", 0.0)
         funding_eth = funding.get("ETH", 0.0)
         avg_fund    = (funding_btc + funding_eth) / 2
@@ -228,7 +243,6 @@ class SentimentAnalyzer:
         })
 
         # ── ③ Long/Short Ratio ────────────────────────────────────────────
-        ls      = self._fetch_ls_ratio()
         ls_btc  = ls.get("BTC", 1.0)
 
         if ls_btc >= 2.0:
@@ -260,7 +274,6 @@ class SentimentAnalyzer:
         })
 
         # ── ④ CoinGecko Trending ─── NUOVA ────────────────────────────────
-        trending        = self._fetch_coingecko_trending()
         t_score         = trending.get("score", 50.0)
         t_coins         = trending.get("coins", [])
         t_changes       = trending.get("changes", [])
@@ -292,7 +305,6 @@ class SentimentAnalyzer:
         })
 
         # ── ⑤ CryptoPanic News NLP ─── NUOVA ──────────────────────────────
-        news          = self._fetch_cryptopanic_news()
         n_score       = news.get("score", 50.0)
         n_bullish     = news.get("bullish", 0)
         n_bearish     = news.get("bearish", 0)
@@ -329,7 +341,6 @@ class SentimentAnalyzer:
         })
 
         # ── ⑥ Open Interest Δ 24h ─── NUOVA ──────────────────────────────
-        oi          = self._fetch_oi_delta()
         oi_btc      = oi.get("btc_pct", 0.0)
         oi_eth      = oi.get("eth_pct", 0.0)
         oi_avg      = (oi_btc + oi_eth) / 2

@@ -65,6 +65,10 @@ class BitgetExchange:
         self._valid_symbols = set()
         self._liquid_symbols = set()
 
+        # OHLCV cache: {(symbol, timeframe, limit, market): (timestamp, data)}
+        self._ohlcv_cache = {}
+        self._ohlcv_ttl = 25  # seconds — shorter than 30s scan interval
+
 
 # ==========================================================
 # INITIALIZATION
@@ -172,6 +176,13 @@ class BitgetExchange:
             if not self.is_symbol_supported(symbol, market):
                 return []
 
+            # Check cache
+            cache_key = (symbol, timeframe, limit, market)
+            now = time.time()
+            cached = self._ohlcv_cache.get(cache_key)
+            if cached and (now - cached[0]) < self._ohlcv_ttl:
+                return cached[1]
+
             raw = self._retry(
                 client.fetch_ohlcv,
                 symbol,
@@ -182,7 +193,7 @@ class BitgetExchange:
             if not raw:
                 return []
 
-            return [
+            result = [
                 {
                     "ts": r[0],
                     "open": r[1],
@@ -193,6 +204,17 @@ class BitgetExchange:
                 }
                 for r in raw
             ]
+
+            # Store in cache
+            self._ohlcv_cache[cache_key] = (now, result)
+
+            # Evict stale entries periodically
+            if len(self._ohlcv_cache) > 50:
+                stale = [k for k, v in self._ohlcv_cache.items() if now - v[0] > self._ohlcv_ttl * 2]
+                for k in stale:
+                    del self._ohlcv_cache[k]
+
+            return result
 
         except Exception as e:
 
@@ -226,6 +248,40 @@ class BitgetExchange:
 
             logger.debug(f"[TICKER] {symbol} {e}")
             return None
+
+
+    def fetch_tickers_batch(self, symbols, market="futures"):
+        """Batch-fetch tickers for multiple symbols in one API call."""
+
+        try:
+
+            client = self.spot if market == "spot" else self.futures
+            normalized = [self._normalize_symbol(s, market) for s in symbols]
+            valid = [s for s in normalized if self.is_symbol_supported(s, market)]
+
+            if not valid:
+                return {}
+
+            raw = self._retry(client.fetch_tickers, valid)
+
+            if not raw:
+                return {}
+
+            result = {}
+            for sym, t in raw.items():
+                result[sym] = {
+                    "last": safe_float(t.get("last") or t.get("close")),
+                    "bid": safe_float(t.get("bid")),
+                    "ask": safe_float(t.get("ask")),
+                    "volume": safe_float(t.get("quoteVolume")),
+                }
+
+            return result
+
+        except Exception as e:
+
+            logger.debug(f"[TICKERS BATCH] {e}")
+            return {}
 
 
 # ==========================================================
