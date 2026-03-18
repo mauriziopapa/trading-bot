@@ -486,8 +486,14 @@ class BitgetExchange:
             params = params or {}
 
             if market == "futures":
-                params["marginMode"] = "isolated"
 
+                params = {
+                    "marginMode": "isolated",
+                    "tradeSide": "open"   # 🔥 CRITICO
+                }
+
+            logger.info(f"[BITGET PARAMS] {params}")
+            
             # ==========================================================
             # EXECUTION (RETRY SAFE)
             # ==========================================================
