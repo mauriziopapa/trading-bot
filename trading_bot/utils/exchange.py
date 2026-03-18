@@ -458,27 +458,31 @@ class BitgetExchange:
 
             notional = amount * price
 
-            if notional < 5:  # soglia sicurezza (Bitget spesso > 5 USDT)
-                logger.warning(f"[ORDER] notional too small {symbol} value={notional}")
+            min_cost = safe_float(markets[symbol]["limits"]["cost"]["min"] or 5)
+
+            if notional < min_cost:
+                logger.warning(f"[ORDER] notional too small {symbol} value={notional} min={min_cost}")
                 return None
 
+
             # ==========================================================
-            # FUTURES PARAMS
-            # One-way mode: no holdSide needed.
-            # For closing: caller passes reduceOnly=True
-            # For opening: just marginMode
+            # FUTURES PARAMS (FIX BITGET)
             # ==========================================================
             params = params or {}
 
             if market == "futures":
-                if "marginMode" not in params:
-                    params["marginMode"] = {"marginMode": "isolated","oneWayMode": True}
+
+                # FORZA modalità corretta
+                params["marginMode"] = "isolated"
+
+                # CRITICO per Bitget
+                params["posSide"] = "long" if side == "buy" else "short"
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
             # ==========================================================
             order = None
-
+            
             try:
 
                 order = self._retry(
