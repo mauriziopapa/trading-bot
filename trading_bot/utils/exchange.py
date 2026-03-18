@@ -482,11 +482,13 @@ class BitgetExchange:
             try:
 
                 order = self._retry(
-                    client.create_market_order,
+                    client.create_order,
                     symbol,
+                    "market",   # type
                     side,
                     amount,
-                    params=params
+                    None,       # price
+                    params
                 )
 
             except Exception as e:
