@@ -242,13 +242,21 @@ class TradingBot:
                 symbol = p["symbol"]
                 side = "buy" if p.get("side") == "long" else "sell"
 
+                # SL/TP: 1% stop loss, 1.5% take profit (matching trade open)
+                if side == "buy":
+                    sl = entry * 0.99
+                    tp = entry * 1.015
+                else:
+                    sl = entry * 1.01
+                    tp = entry * 0.985
+
                 trade = {
                     "symbol": symbol,
                     "side": side,
                     "entry": entry,
                     "size": size,
-                    "stop_loss": entry * 0.97,
-                    "take_profit": entry * 1.04,
+                    "stop_loss": sl,
+                    "take_profit": tp,
                     "created_at": time.time() - 60,
                     "market": "futures"
                 }
@@ -321,8 +329,12 @@ class TradingBot:
         try:
 
             # ==================================================
-            # RISK GATE — with balance override
+            # RISK GATE — with balance override + daily loss check
             # ==================================================
+            if not self.risk.check_daily_loss():
+                logger.info("[SKIP] Daily loss limit — no new trades")
+                return
+
             balance = safe_float(self.exchange.get_usdt_balance("futures"))
             if not self.risk.can_trade(available_balance=balance):
                 logger.info("[SKIP] Risk gate blocked trading")
@@ -459,8 +471,12 @@ class TradingBot:
         try:
 
             # ==================================================
-            # RISK GATE — with balance override
+            # RISK GATE — with balance override + daily loss check
             # ==================================================
+            if not self.risk.check_daily_loss():
+                logger.info("[SKIP] Daily loss limit — no emerging trades")
+                return
+
             balance = safe_float(self.exchange.get_usdt_balance("futures"))
             if not self.risk.can_trade(available_balance=balance):
                 logger.info("[SKIP] Emerging blocked by risk gate")
@@ -570,10 +586,12 @@ class TradingBot:
                 leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
 
                 # ==================================================
-                # POSITION SIZING — correct formula with margin check
+                # POSITION SIZING — dynamic risk + capital usage cap
                 # ==================================================
+                exchange_positions = self.exchange.fetch_positions()
                 sizing = self.risk.compute_position_size(
                     balance=balance, price=price, leverage=leverage,
+                    exchange_positions=exchange_positions,
                 )
                 if sizing is None:
                     logger.warning(f"[BLOCKED] {symbol} sizing failed (balance={balance:.2f})")
@@ -583,10 +601,11 @@ class TradingBot:
                 notional = sizing["notional"]
                 required_margin = sizing["required_margin"]
 
+                risk_used = sizing.get("risk_pct", 0)
                 logger.info(
                     f"[SIZE] {symbol} balance={balance:.2f} "
                     f"notional={notional:.2f} margin={required_margin:.2f} "
-                    f"lev={leverage} size={size}"
+                    f"lev={leverage} risk={risk_used:.2%} size={size}"
                 )
 
                 # ==================================================
@@ -597,13 +616,21 @@ class TradingBot:
                     logger.error(f"[ORDER FAILED] {symbol} size={size} notional={notional:.2f}")
                     return
 
+                # SL/TP: 1% stop loss, 1.5% take profit
+                if side == "buy":
+                    stop_loss = price * 0.99
+                    take_profit = price * 1.015
+                else:
+                    stop_loss = price * 1.01
+                    take_profit = price * 0.985
+
                 trade = {
                     "symbol": symbol,
                     "side": side,
                     "entry": price,
                     "size": size,
-                    "stop_loss": price * 0.97,
-                    "take_profit": price * 1.04,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
                     "created_at": time.time(),
                     "market": "futures"
                 }
@@ -660,7 +687,7 @@ class TradingBot:
         try:
 
             # ==================================================
-            # 🔥 SYNC POSIZIONI REALI EXCHANGE
+            # SYNC EXCHANGE STATE
             # ==================================================
 
             exchange_positions = self.exchange.fetch_positions()
@@ -699,11 +726,40 @@ class TradingBot:
             active_symbols = {p.get("symbol") for p in exchange_positions}
             open_trades = self.risk.all_open_trades()
 
+            # ==================================================
+            # BALANCE + RISK UPDATE
+            # ==================================================
+            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+            self.risk.update_balance(balance)
+            self.risk.check_global_risk(balance)
+
+            # Capital usage check — log exposure
+            used_margin = self.risk.get_used_margin(exchange_positions)
+            total_capital = balance + used_margin
+            exposure = used_margin / total_capital if total_capital > 0 else 0
+
             logger.info(
-                f"[MONITOR] exchange_positions={len(exchange_positions)} "
-                f"risk_positions={len(self.risk.open_futures)} "
+                f"[MONITOR] positions={len(open_trades)} "
+                f"balance={balance:.2f} margin_used={used_margin:.2f} "
+                f"exposure={exposure:.1%} "
                 f"symbols={list(self.risk.open_futures.keys())}"
             )
+
+            # Daily loss check
+            if not self.risk.check_daily_loss():
+                logger.warning("[MONITOR] daily loss limit reached — closing all positions")
+                for trade in open_trades:
+                    symbol = trade["symbol"]
+                    if symbol in active_symbols:
+                        ticker_data = self.exchange.fetch_ticker(symbol, "futures")
+                        if ticker_data:
+                            p = safe_float(ticker_data.get("last"))
+                            if p > 0:
+                                self._close_position(trade, p, "daily_loss_limit", exchange_positions)
+                return
+
+            if not open_trades:
+                return
 
             # --------------------------------------------------
             # BATCH FETCH TICKERS (1 API call instead of N)
@@ -717,7 +773,7 @@ class TradingBot:
                 symbol = trade["symbol"]
 
                 # --------------------------------------------------
-                # GHOST CLEANUP — position gone from exchange, remove from risk manager
+                # GHOST CLEANUP
                 # --------------------------------------------------
 
                 if symbol not in active_symbols:
@@ -726,7 +782,7 @@ class TradingBot:
                     continue
 
                 # --------------------------------------------------
-                # GET PREZZO FROM BATCH
+                # GET PRICE
                 # --------------------------------------------------
 
                 ticker = tickers.get(symbol)
@@ -734,69 +790,84 @@ class TradingBot:
                     continue
 
                 price = safe_float(ticker.get("last"))
-
                 if price <= 0:
                     continue
 
-                # --------------------------------------------------
-                # 🔥 PROFIT ENGINE (CORE)
-                # --------------------------------------------------
-
-                action = self.profit.update_trade(trade, price)
-
-                # --------------------------------------------------
-                # 🔥 FORCE CLOSE
-                # --------------------------------------------------
-
-                if action == "force_close":
-                    self._close_position(trade, price, "force_exit", exchange_positions)
+                entry = safe_float(trade.get("entry"))
+                if entry <= 0:
                     continue
 
                 # --------------------------------------------------
-                # 🔥 PARTIAL CLOSE
+                # PNL CALCULATION
                 # --------------------------------------------------
 
+                pnl_pct = (price - entry) / entry * 100
+                if trade["side"] == "sell":
+                    pnl_pct *= -1
+
+                age_s = time.time() - trade.get("created_at", time.time())
+                age_m = age_s / 60
+
+                logger.info(
+                    f"[CHECK] {symbol} side={trade['side']} "
+                    f"entry={entry:.6f} price={price:.6f} "
+                    f"pnl={pnl_pct:.2f}% age={age_m:.0f}m "
+                    f"sl={safe_float(trade.get('stop_loss')):.6f} "
+                    f"tp={safe_float(trade.get('take_profit')):.6f}"
+                )
+
+                # ==================================================
+                # EXIT ENGINE — Priority order:
+                # 1. SL/TP price levels (risk.should_close)
+                # 2. ProfitEngine (trailing, partials, force_close)
+                # 3. Time exit
+                # 4. Hard fallback limits
+                # ==================================================
+
+                # --- 1. SL/TP PRICE LEVEL CHECK (HIGHEST PRIORITY) ---
+                should_exit, exit_reason = self.risk.should_close(trade, price)
+                if should_exit:
+                    logger.info(f"[EXIT] {symbol} reason={exit_reason} pnl={pnl_pct:.2f}%")
+                    self._close_position(trade, price, exit_reason, exchange_positions)
+                    continue
+
+                # --- 2. PROFIT ENGINE (trailing stops, partials, force close) ---
+                action = self.profit.update_trade(trade, price)
+
+                if action == "force_close":
+                    logger.info(f"[EXIT] {symbol} reason=profit_engine_force pnl={pnl_pct:.2f}%")
+                    self._close_position(trade, price, "force_exit", exchange_positions)
+                    continue
+
                 if action and "partial_close" in action:
-
                     portion = 0.3 if "30" in action else 0.5 if "50" in action else 0.8
-
                     size = trade.get("size", 0) * portion
-
                     if size > 0:
-
                         order = self.exchange.create_market_order(
                             symbol,
                             "sell" if trade["side"] == "buy" else "buy",
                             size,
                             "futures"
                         )
-
                         if order:
                             trade["size"] -= size
-
-                            logger.info(f"[PARTIAL] {symbol} {portion*100:.0f}%")
-
+                            logger.info(f"[PARTIAL] {symbol} {portion*100:.0f}% pnl={pnl_pct:.2f}%")
                     continue
 
-                # --------------------------------------------------
-                # 🔥 HARD STOP / TP BACKUP
-                # --------------------------------------------------
-
-                entry = safe_float(trade.get("entry"))
-
-                if entry <= 0:
+                # --- 3. TIME EXIT — stale positions ---
+                max_hold = 900  # 15 minutes
+                if age_s > max_hold and abs(pnl_pct) < 0.5:
+                    logger.info(f"[EXIT] {symbol} reason=timeout age={age_m:.0f}m pnl={pnl_pct:.2f}%")
+                    self._close_position(trade, price, "timeout", exchange_positions)
                     continue
 
-                pnl_pct = (price - entry) / entry * 100
-
-                if trade["side"] == "sell":
-                    pnl_pct *= -1
-
-                # fallback sicurezza
-                if pnl_pct > 4:
+                # --- 4. HARD FALLBACK — absolute limits ---
+                if pnl_pct >= 4.0:
+                    logger.info(f"[EXIT] {symbol} reason=hard_tp pnl={pnl_pct:.2f}%")
                     self._close_position(trade, price, "hard_tp", exchange_positions)
 
-                elif pnl_pct < -2:
+                elif pnl_pct <= -2.0:
+                    logger.info(f"[EXIT] {symbol} reason=hard_sl pnl={pnl_pct:.2f}%")
                     self._close_position(trade, price, "hard_sl", exchange_positions)
 
         except Exception as e:
