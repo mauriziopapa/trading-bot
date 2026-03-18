@@ -490,6 +490,7 @@ class BitgetExchange:
                 is_closing = params.get("reduceOnly", False)
 
                 params["marginMode"] = "isolated"
+                params["oneWayMode"] = True
 
                 if is_closing:
                     params["tradeSide"] = "close"
