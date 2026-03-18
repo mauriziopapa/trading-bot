@@ -492,7 +492,7 @@ class BitgetExchange:
                 params = {
                     "marginMode": "isolated",
                     "reduceOnly": bool(is_closing),
-                    "positionSide": "net" 
+                    "oneWayMode": True,
                 }
 
             logger.info(f"[BITGET PARAMS] {params}")
