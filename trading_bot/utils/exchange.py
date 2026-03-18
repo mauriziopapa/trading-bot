@@ -472,14 +472,7 @@ class BitgetExchange:
             params = params or {}
 
             if market == "futures":
-
-                is_closing = params.get("reduceOnly", False)
-
-                params.update({
-                    "marginMode": "isolated",
-                    "posSide": "long" if side == "buy" else "short",
-                    "tradeSide": "close" if is_closing else "open"
-                })
+                params["marginMode"] = "isolated"
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
