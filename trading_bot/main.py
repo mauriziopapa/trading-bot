@@ -80,6 +80,8 @@ class TradingBot:
         self.active_strategy = "SNIPER"
         self._running = True
 
+        self.futures.set_position_mode(hedged=False, symbol=symbol)
+
         # 🔥 EXECUTION GOVERNANCE
         self.MAX_POSITIONS = 2          # hard limit — absolute
         self.execution_lock = threading.Lock()  # serialize all trade execution
