@@ -884,52 +884,84 @@ class TradingBot:
         try:
 
             symbol = trade["symbol"]
-            side = "sell" if trade["side"] == "buy" else "buy"
 
             # ==================================================
-            # 🔥 FETCH REAL POSITION (ROBUST) — reuse cached if available
+            # ALWAYS FETCH FRESH EXCHANGE POSITION
+            # Never trust cached sizes — exchange is source of truth
             # ==================================================
 
-            positions = cached_positions or self.exchange.fetch_positions()
+            positions = self.exchange.fetch_positions()
 
-            real_size = 0
-
+            exchange_pos = None
             for p in positions:
-                if p.get("symbol") == symbol:
-
-                    # 🔥 usa contracts ma fallback su info
-                    real_size = float(
-                        p.get("contracts")
-                        or p.get("info", {}).get("total")
-                        or 0
-                    )
+                if p.get("symbol") == symbol and safe_float(p.get("contracts")) > 0:
+                    exchange_pos = p
                     break
 
-            if real_size <= 0:
-                logger.warning(f"[CLOSE] no position {symbol}")
+            if not exchange_pos:
+                logger.warning(f"[CLOSE] {symbol} not found on exchange — cleaning up state")
+                self.risk.register_close(symbol, 0, "futures", "not_on_exchange")
+                try:
+                    self.db.close_position_by_symbol(symbol, reason="not_on_exchange")
+                except Exception:
+                    pass
                 return
 
+            # Real size and side from exchange (NOT from runtime trade dict)
+            real_size = safe_float(exchange_pos.get("contracts"))
+            exchange_side = exchange_pos.get("side", "")  # "long" or "short"
+
+            # Close side is opposite of exchange position side
+            close_side = "sell" if exchange_side == "long" else "buy"
+
+            # holdSide MUST be the POSITION side (not the order side)
+            # This tells Bitget: "I'm closing THIS position"
+            hold_side = "long" if exchange_side == "long" else "short"
+
+            logger.info(
+                f"[CLOSE] {symbol} exchange_side={exchange_side} "
+                f"close_side={close_side} holdSide={hold_side} "
+                f"size={real_size} reason={reason}"
+            )
+
             # ==================================================
-            # 🔥 PRECISION NORMALIZATION
+            # PRECISION NORMALIZATION
             # ==================================================
 
             try:
                 real_size = float(
                     self.exchange.futures.amount_to_precision(symbol, real_size)
                 )
-            except:
+            except Exception:
                 pass
 
             # ==================================================
-            # CLOSE ORDER — single attempt, no retry loop
+            # CLOSE ORDER — retry with size reduction on failure
             # ==================================================
 
-            order = self.exchange.create_market_order(
-                symbol, side, real_size, "futures"
-            )
+            order = None
+            close_size = real_size
+
+            for attempt in range(3):
+                params = {"holdSide": hold_side}
+                order = self.exchange.create_market_order(
+                    symbol, close_side, close_size, "futures", params=params
+                )
+                if order:
+                    break
+
+                # Reduce size by 5% and retry (handles rounding/dust issues)
+                close_size = round(close_size * 0.95, 6)
+                logger.warning(
+                    f"[CLOSE RETRY] {symbol} attempt={attempt+1} "
+                    f"reducing size to {close_size}"
+                )
+
+                if close_size <= 0:
+                    break
 
             if not order:
-                logger.error(f"[CLOSE FAILED] {symbol} size={real_size}")
+                logger.error(f"[CLOSE FAILED] {symbol} all attempts exhausted size={real_size}")
                 return
 
             # ==================================================
@@ -953,13 +985,16 @@ class TradingBot:
             # PNL
             # ==================================================
 
-            entry = trade.get("entry", 0)
+            entry = safe_float(trade.get("entry", 0))
 
-            pnl_pct = ((price - entry) / entry) * 100
-            if trade["side"] == "sell":
-                pnl_pct *= -1
+            if entry > 0:
+                pnl_pct = ((price - entry) / entry) * 100
+                if exchange_side == "short":
+                    pnl_pct *= -1
+            else:
+                pnl_pct = 0
 
-            pnl_usdt = pnl_pct * real_size
+            pnl_usdt = pnl_pct / 100 * real_size * entry
 
             # ==================================================
             # UPDATE STATE
@@ -986,7 +1021,10 @@ class TradingBot:
                 market="futures"
             )
 
-            logger.info(f"[CLOSE] {symbol} PnL={pnl_pct:.2f}%")
+            logger.info(
+                f"[CLOSE OK] {symbol} pnl={pnl_pct:.2f}% "
+                f"pnl_usdt={pnl_usdt:.2f} reason={reason}"
+            )
 
         except Exception as e:
 

@@ -401,15 +401,18 @@ class BitgetExchange:
 
             # ==========================================================
             # FUTURES PARAMS (CRITICO)
+            # holdSide: "long" to close a LONG, "short" to close a SHORT
+            # For opening: holdSide matches order side (buy=long, sell=short)
+            # For closing: caller MUST pass holdSide = position side
             # ==========================================================
             params = params or {}
 
             if market == "futures":
 
-                params.update({
-                    "marginMode": "cross",  # oppure "isolated"
-                    "holdSide": "long" if side == "buy" else "short"
-                })
+                if "marginMode" not in params:
+                    params["marginMode"] = "cross"
+                if "holdSide" not in params:
+                    params["holdSide"] = "long" if side == "buy" else "short"
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
