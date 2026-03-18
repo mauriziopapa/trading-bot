@@ -43,11 +43,11 @@ class RiskManager:
 
         self.db = None
 
-        self.max_concurrent_trades = 2
+        self.MAX_POSITIONS = 2             # HARD LIMIT — absolute, no override
         self.global_stop = False
 
         # Capital & exposure limits
-        self.MAX_CAPITAL_USAGE = 0.5      # max 50% of capital in margin
+        self.MAX_CAPITAL_USAGE = 0.6      # max 60% of capital in margin
         self.MAX_DAILY_LOSS_PCT = 3.0     # max 3% daily loss -> stop trading
 
         # Daily loss tracking
@@ -161,8 +161,8 @@ class RiskManager:
                             "side": side,
                             "entry": entry,
                             "size": edata["size"],
-                            "stop_loss": entry * (0.99 if side == "buy" else 1.01),
-                            "take_profit": entry * (1.015 if side == "buy" else 0.985),
+                            "stop_loss": entry * (0.995 if side == "buy" else 1.005),
+                            "take_profit": entry * (1.005 if side == "buy" else 0.995),
                             "created_at": time.time(),
                             "market": "futures",
                         }
@@ -213,8 +213,7 @@ class RiskManager:
 
     def can_trade(self, symbol=None, available_balance=None):
         """
-        Global risk gate with balance-based override.
-        Counts unique active symbols (not raw position entries).
+        Global risk gate — HARD position limit, no override.
         """
 
         if self.global_stop:
@@ -223,31 +222,23 @@ class RiskManager:
 
         with self._lock:
             active_count = len(self.open_futures)
-            min_trade_balance = 10  # minimum USDT to place any trade
+            pending_count = len(self._pending_symbols)
 
-            logger.debug(
-                f"[RISK] active_symbols={active_count} "
-                f"max={self.max_concurrent_trades} "
+            logger.info(
+                f"[RISK] can_trade check: active={active_count} "
+                f"pending={pending_count} max={self.MAX_POSITIONS} "
                 f"open={list(self.open_futures.keys())} "
                 f"balance={available_balance}"
             )
 
-            # Balance-based override: allow more positions if margin available
-            if available_balance is not None and available_balance > min_trade_balance:
-                hard_max = max(self.max_concurrent_trades, 3)
-                if active_count >= hard_max:
-                    logger.info(
-                        f"[RISK] can_trade=False reason=hard_max({hard_max}) "
-                        f"active={active_count}"
-                    )
-                    return False
-            else:
-                if active_count >= self.max_concurrent_trades:
-                    logger.info(
-                        f"[RISK] can_trade=False reason=max_positions({self.max_concurrent_trades}) "
-                        f"active={active_count} balance={available_balance}"
-                    )
-                    return False
+            # HARD LIMIT — absolute, includes pending (in-flight) trades
+            if active_count + pending_count >= self.MAX_POSITIONS:
+                logger.info(
+                    f"[RISK] can_trade=False reason=hard_limit "
+                    f"active={active_count} pending={pending_count} "
+                    f"max={self.MAX_POSITIONS}"
+                )
+                return False
 
             if symbol:
                 if symbol in self.open_futures or symbol in self.open_spot:
@@ -257,6 +248,20 @@ class RiskManager:
                     logger.info(f"[RISK] can_trade=False reason=symbol_pending({symbol})")
                     return False
 
+        return True
+
+    def check_exposure(self, available_balance, exchange_positions=None):
+        """Block new trades if exposure exceeds MAX_CAPITAL_USAGE (60%)."""
+        used_margin = self.get_used_margin(exchange_positions)
+        total = available_balance + used_margin
+        if total <= 0:
+            return True
+        exposure = used_margin / total
+        if exposure > self.MAX_CAPITAL_USAGE:
+            logger.info(
+                f"[RISK] exposure={exposure:.1%} > max={self.MAX_CAPITAL_USAGE:.0%} — blocked"
+            )
+            return False
         return True
 
 

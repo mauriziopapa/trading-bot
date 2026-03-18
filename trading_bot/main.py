@@ -78,8 +78,9 @@ class TradingBot:
         self.active_strategy = "SNIPER"
         self._running = True
 
-        # 🔥 CONTROLLO TRADING
-        self.max_concurrent_trades = 2
+        # 🔥 EXECUTION GOVERNANCE
+        self.MAX_POSITIONS = 2          # hard limit — absolute
+        self.execution_lock = threading.Lock()  # serialize all trade execution
         self.last_trade_time = {}
         self.cooldown_seconds = 120
 
@@ -242,13 +243,13 @@ class TradingBot:
                 symbol = p["symbol"]
                 side = "buy" if p.get("side") == "long" else "sell"
 
-                # SL/TP: 1% stop loss, 1.5% take profit (matching trade open)
+                # SL/TP: 0.5% stop loss, 0.5% take profit (tight scalping)
                 if side == "buy":
-                    sl = entry * 0.99
-                    tp = entry * 1.015
+                    sl = entry * 0.995
+                    tp = entry * 1.005
                 else:
-                    sl = entry * 1.01
-                    tp = entry * 0.985
+                    sl = entry * 1.005
+                    tp = entry * 0.995
 
                 trade = {
                     "symbol": symbol,
@@ -299,6 +300,11 @@ class TradingBot:
 
     def _is_valid_trade(self, symbol):
 
+        # 0. Hard position limit — absolute
+        if len(self.risk.open_futures) >= self.MAX_POSITIONS:
+            logger.info(f"[GUARD] {symbol} blocked — hard limit {self.MAX_POSITIONS}")
+            return False
+
         # 1. Position guard — NEVER open duplicate
         if self.risk.is_symbol_open(symbol):
             logger.info(f"[GUARD] {symbol} already has open position")
@@ -310,7 +316,13 @@ class TradingBot:
             logger.info(f"[GUARD] {symbol} blocked by risk gate")
             return False
 
-        # 3. Cooldown — prevent rapid re-entry on same symbol
+        # 3. Exposure control — block if > 60%
+        exchange_positions = self.exchange.fetch_positions()
+        if not self.risk.check_exposure(balance, exchange_positions):
+            logger.info(f"[GUARD] {symbol} blocked by exposure limit")
+            return False
+
+        # 4. Cooldown — prevent rapid re-entry on same symbol
         now = time.time()
         last = self.last_trade_time.get(symbol, 0)
 
@@ -529,6 +541,13 @@ class TradingBot:
 
     def _execute_signal(self, signal):
 
+        # ==================================================
+        # EXECUTION LOCK — serialize all trade execution
+        # ==================================================
+        if not self.execution_lock.acquire(blocking=False):
+            logger.info("[EXEC] execution lock busy — skipping")
+            return
+
         try:
 
             symbol = signal.symbol
@@ -549,6 +568,16 @@ class TradingBot:
 
             if signal_id in self._executed_signals:
                 logger.info(f"[DEDUP] {signal_id} already executed recently")
+                return
+
+            # ==================================================
+            # HARD POSITION LIMIT — absolute check before anything
+            # ==================================================
+            if len(self.risk.open_futures) >= self.MAX_POSITIONS:
+                logger.info(
+                    f"[BLOCKED] hard limit {self.MAX_POSITIONS} reached "
+                    f"— rejecting {symbol}"
+                )
                 return
 
             # ==================================================
@@ -573,6 +602,18 @@ class TradingBot:
                 return
 
             try:
+                # ==================================================
+                # RISK RE-VALIDATION — double-check after acquiring lock
+                # ==================================================
+                if len(self.risk.open_futures) >= self.MAX_POSITIONS:
+                    logger.info(f"[BLOCKED] position limit hit after reserve — {symbol}")
+                    return
+
+                balance = safe_float(self.exchange.get_usdt_balance("futures"))
+                exchange_positions = self.exchange.fetch_positions()
+                if not self.risk.check_exposure(balance, exchange_positions):
+                    logger.info(f"[BLOCKED] exposure limit — {symbol}")
+                    return
 
                 ticker = self.exchange.fetch_ticker(symbol, "futures")
                 if not ticker:
@@ -582,13 +623,12 @@ class TradingBot:
                 if price <= 0:
                     return
 
-                balance = safe_float(self.exchange.get_usdt_balance("futures"))
                 leverage = getattr(settings, "DEFAULT_LEVERAGE", 10)
 
                 # ==================================================
                 # POSITION SIZING — dynamic risk + capital usage cap
+                # (balance and exchange_positions already fetched above)
                 # ==================================================
-                exchange_positions = self.exchange.fetch_positions()
                 sizing = self.risk.compute_position_size(
                     balance=balance, price=price, leverage=leverage,
                     exchange_positions=exchange_positions,
@@ -616,13 +656,13 @@ class TradingBot:
                     logger.error(f"[ORDER FAILED] {symbol} size={size} notional={notional:.2f}")
                     return
 
-                # SL/TP: 1% stop loss, 1.5% take profit
+                # SL/TP: 0.5% stop loss, 0.5% take profit (tight scalping)
                 if side == "buy":
-                    stop_loss = price * 0.99
-                    take_profit = price * 1.015
+                    stop_loss = price * 0.995
+                    take_profit = price * 1.005
                 else:
-                    stop_loss = price * 1.01
-                    take_profit = price * 0.985
+                    stop_loss = price * 1.005
+                    take_profit = price * 0.995
 
                 trade = {
                     "symbol": symbol,
@@ -676,6 +716,8 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"[TRADE] {e}")
+        finally:
+            self.execution_lock.release()
 
 
 # ==========================================================
@@ -744,6 +786,44 @@ class TradingBot:
                 f"exposure={exposure:.1%} "
                 f"symbols={list(self.risk.open_futures.keys())}"
             )
+
+            # ==================================================
+            # AUTO CLEANUP — if positions exceed MAX, close worst PnL
+            # ==================================================
+            if len(open_trades) > self.MAX_POSITIONS:
+                logger.warning(
+                    f"[CLEANUP] {len(open_trades)} positions > max {self.MAX_POSITIONS} — closing worst"
+                )
+                # Calculate PnL for each trade to find worst
+                trades_with_pnl = []
+                for t in open_trades:
+                    sym = t["symbol"]
+                    tk = self.exchange.fetch_ticker(sym, "futures")
+                    if tk:
+                        p = safe_float(tk.get("last"))
+                        e = safe_float(t.get("entry"))
+                        if e > 0 and p > 0:
+                            pnl = (p - e) / e * 100
+                            if t.get("side") == "sell":
+                                pnl *= -1
+                            trades_with_pnl.append((t, p, pnl))
+
+                if trades_with_pnl:
+                    # Sort by PnL ascending — worst first
+                    trades_with_pnl.sort(key=lambda x: x[2])
+                    # Close excess positions starting from worst
+                    excess = len(open_trades) - self.MAX_POSITIONS
+                    for i in range(min(excess, len(trades_with_pnl))):
+                        worst_trade, worst_price, worst_pnl = trades_with_pnl[i]
+                        logger.info(
+                            f"[CLEANUP] closing {worst_trade['symbol']} "
+                            f"pnl={worst_pnl:.2f}% (worst)"
+                        )
+                        self._close_position(
+                            worst_trade, worst_price, "risk_cleanup", exchange_positions
+                        )
+                    # Refresh after cleanup
+                    open_trades = self.risk.all_open_trades()
 
             # Daily loss check
             if not self.risk.check_daily_loss():
@@ -854,19 +934,19 @@ class TradingBot:
                             logger.info(f"[PARTIAL] {symbol} {portion*100:.0f}% pnl={pnl_pct:.2f}%")
                     continue
 
-                # --- 3. TIME EXIT — stale positions ---
-                max_hold = 900  # 15 minutes
-                if age_s > max_hold and abs(pnl_pct) < 0.5:
-                    logger.info(f"[EXIT] {symbol} reason=timeout age={age_m:.0f}m pnl={pnl_pct:.2f}%")
+                # --- 3. TIME EXIT — 180s max hold ---
+                max_hold = 180  # 3 minutes
+                if age_s > max_hold:
+                    logger.info(f"[EXIT] {symbol} reason=timeout age={age_s:.0f}s pnl={pnl_pct:.2f}%")
                     self._close_position(trade, price, "timeout", exchange_positions)
                     continue
 
                 # --- 4. HARD FALLBACK — absolute limits ---
-                if pnl_pct >= 4.0:
+                if pnl_pct >= 1.0:
                     logger.info(f"[EXIT] {symbol} reason=hard_tp pnl={pnl_pct:.2f}%")
                     self._close_position(trade, price, "hard_tp", exchange_positions)
 
-                elif pnl_pct <= -2.0:
+                elif pnl_pct <= -1.0:
                     logger.info(f"[EXIT] {symbol} reason=hard_sl pnl={pnl_pct:.2f}%")
                     self._close_position(trade, price, "hard_sl", exchange_positions)
 
