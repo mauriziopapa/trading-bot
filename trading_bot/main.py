@@ -220,63 +220,75 @@ class TradingBot:
 
     def _recover_positions_from_exchange(self):
         """
-        Exchange is the source of truth.
-        Clear risk manager state and rebuild from real exchange positions.
+        Exchange is the sole source of truth.
+        Sync exchange → risk manager → DB.
         """
-
         try:
             positions = self.exchange.fetch_positions()
+            normalized = self._normalize_positions(positions)
 
-            # Clear existing futures state — exchange is authoritative
-            self.risk.open_futures.clear()
+            # Rebuild risk state from exchange
+            self.risk.rebuild(normalized)
 
-            recovered = 0
-
-            for p in positions:
-
-                size = safe_float(p.get("contracts"))
-                entry = safe_float(p.get("entryPrice"))
-
-                if size <= 0:
-                    continue
-
-                symbol = p["symbol"]
-                side = "buy" if p.get("side") == "long" else "sell"
-
-                # SL/TP: 0.5% stop loss, 0.5% take profit (tight scalping)
-                if side == "buy":
-                    sl = entry * 0.995
-                    tp = entry * 1.005
-                else:
-                    sl = entry * 1.005
-                    tp = entry * 0.995
-
-                trade = {
-                    "symbol": symbol,
-                    "side": side,
-                    "entry": entry,
-                    "size": size,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "created_at": time.time() - 60,
-                    "market": "futures"
-                }
-
-                self.risk.register_open(symbol, trade, "futures")
-                recovered += 1
-
-                logger.info(f"[RECOVERY] {symbol} restored from exchange")
-
-            logger.info(f"[RECOVERY] {recovered} positions recovered from exchange")
-
-            # Sync DB: replace all open positions with exchange state
+            # Mirror to DB
             try:
                 self.db.replace_open_positions(self.risk.all_open_trades())
             except Exception as db_err:
                 logger.error(f"[RECOVERY] DB sync failed: {db_err}")
 
+            logger.info(f"[RECOVERY] {len(normalized)} positions synced from exchange")
+
         except Exception as e:
             logger.error(f"[RECOVERY] {e}")
+
+    def _normalize_positions(self, exchange_positions):
+        """Convert raw exchange positions to normalized format."""
+        normalized = []
+        for p in exchange_positions:
+            size = safe_float(p.get("contracts"))
+            if abs(size) <= 0:
+                continue
+            symbol = p["symbol"]
+            side_raw = p.get("side", "long")
+            side = "buy" if side_raw == "long" else "sell"
+            entry = safe_float(p.get("entryPrice"))
+            notional = safe_float(p.get("notional", 0))
+            normalized.append({
+                "symbol": symbol,
+                "side": side,
+                "size": abs(size),
+                "entry": entry,
+                "notional": notional,
+            })
+        return normalized
+
+    def _sync_positions(self):
+        """
+        Full exchange → runtime → DB sync. Called before every decision cycle.
+        Returns normalized exchange positions.
+        """
+        try:
+            exchange_positions = self.exchange.fetch_positions()
+            normalized = self._normalize_positions(exchange_positions)
+
+            # Sync risk manager from exchange
+            sync_result = self.risk.sync_from_exchange(exchange_positions)
+            if sync_result["added"] or sync_result["removed"]:
+                logger.info(
+                    f"[SYNC] +{len(sync_result['added'])} added, "
+                    f"-{len(sync_result['removed'])} removed"
+                )
+
+            # Mirror to DB
+            try:
+                self.db.replace_open_positions(self.risk.all_open_trades())
+            except Exception:
+                pass
+
+            return exchange_positions, normalized
+        except Exception as e:
+            logger.error(f"[SYNC] error: {e}")
+            return [], []
 
 
 # ==========================================================
@@ -603,14 +615,22 @@ class TradingBot:
 
             try:
                 # ==================================================
-                # RISK RE-VALIDATION — double-check after acquiring lock
+                # SYNC + RE-VALIDATE — exchange truth before opening
                 # ==================================================
+                exchange_positions, _ = self._sync_positions()
+
+                # Check again after sync
                 if len(self.risk.open_futures) >= self.MAX_POSITIONS:
-                    logger.info(f"[BLOCKED] position limit hit after reserve — {symbol}")
+                    logger.info(f"[BLOCKED] position limit after sync — {symbol}")
+                    return
+
+                # Duplicate check (exchange may have this symbol already)
+                if any(p.get("symbol") == symbol and safe_float(p.get("contracts")) > 0
+                       for p in exchange_positions):
+                    logger.info(f"[BLOCKED] {symbol} already on exchange")
                     return
 
                 balance = safe_float(self.exchange.get_usdt_balance("futures"))
-                exchange_positions = self.exchange.fetch_positions()
                 if not self.risk.check_exposure(balance, exchange_positions):
                     logger.info(f"[BLOCKED] exposure limit — {symbol}")
                     return
@@ -710,6 +730,9 @@ class TradingBot:
 
                 logger.info(f"[TRADE OPEN] {symbol}")
 
+                # Post-open sync — confirm position on exchange
+                self._sync_positions()
+
             finally:
                 # Always release if register_open didn't consume it
                 self.risk.release_symbol(symbol)
@@ -729,72 +752,48 @@ class TradingBot:
         try:
 
             # ==================================================
-            # SYNC EXCHANGE STATE
+            # SYNC EXCHANGE STATE — BEFORE any decisions
             # ==================================================
 
-            exchange_positions = self.exchange.fetch_positions()
-
-            # Sync runtime state from exchange (add missing, remove ghosts, update sizes)
-            sync_result = self.risk.sync_from_exchange(exchange_positions)
-            if sync_result["added"] or sync_result["removed"]:
-                logger.info(
-                    f"[SYNC] +{len(sync_result['added'])} added, "
-                    f"-{len(sync_result['removed'])} removed"
-                )
-                # Sync DB for ghost removals
-                for sym in sync_result["removed"]:
-                    try:
-                        self.db.close_position_by_symbol(sym, reason="ghost_sync")
-                    except Exception:
-                        pass
-                # Sync DB for newly discovered positions
-                for sym in sync_result["added"]:
-                    try:
-                        trade = self.risk.open_futures.get(sym, {})
-                        order_id = f"sync_{int(time.time())}_{sym.replace('/', '_')}"
-                        self.db.save_trade_open(
-                            order_id=order_id, symbol=sym, market="futures",
-                            strategy="exchange_sync", side=trade.get("side", "buy"),
-                            entry=safe_float(trade.get("entry")),
-                            size=safe_float(trade.get("size")),
-                            stop_loss=safe_float(trade.get("stop_loss")),
-                            take_profit=safe_float(trade.get("take_profit")),
-                            confidence=0, atr=0, notes="synced from exchange",
-                            timeframe="", leverage=getattr(settings, "DEFAULT_LEVERAGE", 10),
-                        )
-                    except Exception:
-                        pass
+            exchange_positions, normalized = self._sync_positions()
 
             active_symbols = {p.get("symbol") for p in exchange_positions}
             open_trades = self.risk.all_open_trades()
 
             # ==================================================
-            # BALANCE + RISK UPDATE
+            # BALANCE + EXPOSURE (notional / equity)
             # ==================================================
             balance = safe_float(self.exchange.get_usdt_balance("futures"))
             self.risk.update_balance(balance)
             self.risk.check_global_risk(balance)
 
-            # Capital usage check — log exposure
-            used_margin = self.risk.get_used_margin(exchange_positions)
-            total_capital = balance + used_margin
-            exposure = used_margin / total_capital if total_capital > 0 else 0
+            exposure = self.risk.calculate_exposure(exchange_positions, balance)
 
             logger.info(
-                f"[MONITOR] positions={len(open_trades)} "
-                f"balance={balance:.2f} margin_used={used_margin:.2f} "
-                f"exposure={exposure:.1%} "
+                f"[STATE] positions={len(open_trades)} "
+                f"balance={balance:.2f} exposure={exposure:.2f} "
                 f"symbols={list(self.risk.open_futures.keys())}"
             )
+
+            # ==================================================
+            # EMERGENCY RESET — abnormal margin state
+            # ==================================================
+            used_margin = self.risk.get_used_margin(exchange_positions)
+            if used_margin > balance * 1.5 and balance > 0:
+                logger.warning(
+                    f"[EMERGENCY RESET] margin={used_margin:.2f} > 1.5x balance={balance:.2f}"
+                )
+                self.exchange.bootstrap_clean()
+                self._sync_positions()
+                return
 
             # ==================================================
             # AUTO CLEANUP — if positions exceed MAX, close worst PnL
             # ==================================================
             if len(open_trades) > self.MAX_POSITIONS:
                 logger.warning(
-                    f"[CLEANUP] {len(open_trades)} positions > max {self.MAX_POSITIONS} — closing worst"
+                    f"[CLEANUP] {len(open_trades)} positions > max {self.MAX_POSITIONS}"
                 )
-                # Calculate PnL for each trade to find worst
                 trades_with_pnl = []
                 for t in open_trades:
                     sym = t["symbol"]
@@ -809,21 +808,30 @@ class TradingBot:
                             trades_with_pnl.append((t, p, pnl))
 
                 if trades_with_pnl:
-                    # Sort by PnL ascending — worst first
                     trades_with_pnl.sort(key=lambda x: x[2])
-                    # Close excess positions starting from worst
                     excess = len(open_trades) - self.MAX_POSITIONS
                     for i in range(min(excess, len(trades_with_pnl))):
                         worst_trade, worst_price, worst_pnl = trades_with_pnl[i]
                         logger.info(
-                            f"[CLEANUP] closing {worst_trade['symbol']} "
-                            f"pnl={worst_pnl:.2f}% (worst)"
+                            f"[CLEANUP] closing {worst_trade['symbol']} pnl={worst_pnl:.2f}%"
                         )
                         self._close_position(
                             worst_trade, worst_price, "risk_cleanup", exchange_positions
                         )
-                    # Refresh after cleanup
                     open_trades = self.risk.all_open_trades()
+
+            # ==================================================
+            # GHOST CLEANUP — DB positions not on exchange
+            # ==================================================
+            try:
+                db_trades = self.db.get_open_trades() if self.db.enabled else []
+                for db_pos in db_trades:
+                    if db_pos["symbol"] not in active_symbols:
+                        self.db.close_position_by_symbol(db_pos["symbol"], reason="ghost_db")
+                        self.risk.register_close(db_pos["symbol"], 0, "futures", "ghost_db")
+                        logger.warning(f"[GHOST CLEANED] {db_pos['symbol']}")
+            except Exception:
+                pass
 
             # Daily loss check
             if not self.risk.check_daily_loss():
@@ -927,7 +935,8 @@ class TradingBot:
                             symbol,
                             "sell" if trade["side"] == "buy" else "buy",
                             size,
-                            "futures"
+                            "futures",
+                            params={"reduceOnly": True}
                         )
                         if order:
                             trade["size"] -= size
@@ -966,8 +975,7 @@ class TradingBot:
             symbol = trade["symbol"]
 
             # ==================================================
-            # ALWAYS FETCH FRESH EXCHANGE POSITION
-            # Never trust cached sizes — exchange is source of truth
+            # FETCH FRESH EXCHANGE POSITION — exchange is truth
             # ==================================================
 
             positions = self.exchange.fetch_positions()
@@ -979,7 +987,7 @@ class TradingBot:
                     break
 
             if not exchange_pos:
-                logger.warning(f"[CLOSE] {symbol} not found on exchange — cleaning up state")
+                logger.warning(f"[CLOSE] {symbol} not on exchange — cleaning state")
                 self.risk.register_close(symbol, 0, "futures", "not_on_exchange")
                 try:
                     self.db.close_position_by_symbol(symbol, reason="not_on_exchange")
@@ -987,27 +995,17 @@ class TradingBot:
                     pass
                 return
 
-            # Real size and side from exchange (NOT from runtime trade dict)
+            # Real size and side from exchange
             real_size = safe_float(exchange_pos.get("contracts"))
             exchange_side = exchange_pos.get("side", "")  # "long" or "short"
-
-            # Close side is opposite of exchange position side
             close_side = "sell" if exchange_side == "long" else "buy"
 
-            # holdSide MUST be the POSITION side (not the order side)
-            # This tells Bitget: "I'm closing THIS position"
-            hold_side = "long" if exchange_side == "long" else "short"
-
             logger.info(
-                f"[CLOSE] {symbol} exchange_side={exchange_side} "
-                f"close_side={close_side} holdSide={hold_side} "
-                f"size={real_size} reason={reason}"
+                f"[CLOSE] {symbol} side={exchange_side} "
+                f"close_side={close_side} size={real_size} reason={reason}"
             )
 
-            # ==================================================
-            # PRECISION NORMALIZATION
-            # ==================================================
-
+            # Precision normalization
             try:
                 real_size = float(
                     self.exchange.futures.amount_to_precision(symbol, real_size)
@@ -1016,57 +1014,56 @@ class TradingBot:
                 pass
 
             # ==================================================
-            # CLOSE ORDER — retry with size reduction on failure
+            # CLOSE ORDER — reduceOnly, retry with size reduction
             # ==================================================
 
             order = None
             close_size = real_size
 
             for attempt in range(3):
-                params = {"holdSide": hold_side}
+                params = {"reduceOnly": True}
                 order = self.exchange.create_market_order(
                     symbol, close_side, close_size, "futures", params=params
                 )
                 if order:
                     break
 
-                # Reduce size by 5% and retry (handles rounding/dust issues)
                 close_size = round(close_size * 0.95, 6)
                 logger.warning(
-                    f"[CLOSE RETRY] {symbol} attempt={attempt+1} "
-                    f"reducing size to {close_size}"
+                    f"[CLOSE RETRY] {symbol} attempt={attempt+1} size={close_size}"
                 )
-
                 if close_size <= 0:
                     break
 
             if not order:
-                logger.error(f"[CLOSE FAILED] {symbol} all attempts exhausted size={real_size}")
-                return
+                logger.error(f"[CLOSE FAILED] {symbol} all attempts exhausted")
 
             # ==================================================
-            # CLOSE VERIFICATION — confirm position is gone
+            # VERIFY — but NEVER block state update
             # ==================================================
 
+            verified = False
             try:
-                time.sleep(0.5)
-                verify_positions = self.exchange.fetch_positions()
-                still_open = any(
-                    p.get("symbol") == symbol and safe_float(p.get("contracts")) > 0
-                    for p in verify_positions
-                )
-                if still_open:
-                    logger.error(f"[CLOSE VERIFY] {symbol} still open after close order — skipping state update")
-                    return
+                for _ in range(3):
+                    time.sleep(0.5)
+                    verify_positions = self.exchange.fetch_positions()
+                    still_open = any(
+                        p.get("symbol") == symbol and safe_float(p.get("contracts")) > 0
+                        for p in verify_positions
+                    )
+                    if not still_open:
+                        verified = True
+                        break
+                if not verified:
+                    logger.warning(f"[CLOSE VERIFY] {symbol} still open after close — state updated anyway")
             except Exception as ve:
-                logger.warning(f"[CLOSE VERIFY] verification failed: {ve} — proceeding")
+                logger.warning(f"[CLOSE VERIFY] error: {ve}")
 
             # ==================================================
-            # PNL
+            # PNL — always calculate
             # ==================================================
 
             entry = safe_float(trade.get("entry", 0))
-
             if entry > 0:
                 pnl_pct = ((price - entry) / entry) * 100
                 if exchange_side == "short":
@@ -1077,7 +1074,7 @@ class TradingBot:
             pnl_usdt = pnl_pct / 100 * real_size * entry
 
             # ==================================================
-            # UPDATE STATE
+            # ALWAYS UPDATE STATE — even if verify failed
             # ==================================================
 
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
@@ -1088,22 +1085,18 @@ class TradingBot:
                     pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
                 )
             except Exception as db_err:
-                logger.warning(f"[DB] close_position_by_symbol failed: {db_err}")
+                logger.warning(f"[DB] close failed: {db_err}")
 
             self.notifier.trade_closed(
-                symbol=symbol,
-                side=trade["side"],
-                entry=entry,
-                exit_price=price,
-                pnl_pct=pnl_pct,
-                pnl_usdt=pnl_usdt,
-                reason=reason,
-                market="futures"
+                symbol=symbol, side=trade["side"],
+                entry=entry, exit_price=price,
+                pnl_pct=pnl_pct, pnl_usdt=pnl_usdt,
+                reason=reason, market="futures"
             )
 
             logger.info(
                 f"[CLOSE OK] {symbol} pnl={pnl_pct:.2f}% "
-                f"pnl_usdt={pnl_usdt:.2f} reason={reason}"
+                f"pnl_usdt={pnl_usdt:.2f} reason={reason} verified={verified}"
             )
 
         except Exception as e:

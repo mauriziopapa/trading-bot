@@ -86,7 +86,70 @@ class BitgetExchange:
 
             logger.info(f"[EXCHANGE] Futures markets: {len(self._futures_markets)}")
 
+            # Force one-way mode (no hedge)
+            self._set_one_way_mode()
+
             self._build_symbol_cache()
+
+
+# ==========================================================
+# ONE-WAY MODE
+# ==========================================================
+
+    def _set_one_way_mode(self):
+        """Disable hedge mode — one-way position only."""
+        try:
+            self.futures.set_position_mode(False)
+            logger.info("[EXCHANGE] Position mode set to one-way (no hedge)")
+        except Exception as e:
+            # Some accounts may already be in one-way mode
+            logger.warning(f"[EXCHANGE] set_position_mode: {e}")
+
+
+# ==========================================================
+# BOOTSTRAP — cancel orders + close all positions
+# ==========================================================
+
+    def bootstrap_clean(self):
+        """Cancel all open orders and close all positions for a clean start."""
+        try:
+            # Cancel all open orders
+            try:
+                open_orders = self._retry(self.futures.fetch_open_orders)
+                for o in (open_orders or []):
+                    try:
+                        self._retry(
+                            self.futures.cancel_order,
+                            o["id"], o.get("symbol", "")
+                        )
+                        logger.info(f"[BOOTSTRAP] cancelled order {o['id']} {o.get('symbol')}")
+                    except Exception as oe:
+                        logger.warning(f"[BOOTSTRAP] cancel order failed: {oe}")
+            except Exception as e:
+                logger.warning(f"[BOOTSTRAP] fetch_open_orders: {e}")
+
+            # Close all positions
+            positions = self.fetch_positions()
+            for p in positions:
+                size = safe_float(p.get("contracts"))
+                if abs(size) <= 0:
+                    continue
+                symbol = p["symbol"]
+                pos_side = p.get("side", "")
+                close_side = "sell" if pos_side == "long" else "buy"
+                try:
+                    self._retry(
+                        self.futures.create_market_order,
+                        symbol, close_side, abs(size),
+                        params={"reduceOnly": True}
+                    )
+                    logger.info(f"[BOOTSTRAP] closed {symbol} {pos_side} size={size}")
+                except Exception as pe:
+                    logger.error(f"[BOOTSTRAP] close {symbol} failed: {pe}")
+
+            logger.warning("[BOOTSTRAP] exchange fully cleaned")
+        except Exception as e:
+            logger.error(f"[BOOTSTRAP] error: {e}")
 
 
 # ==========================================================
@@ -400,19 +463,16 @@ class BitgetExchange:
                 return None
 
             # ==========================================================
-            # FUTURES PARAMS (CRITICO)
-            # holdSide: "long" to close a LONG, "short" to close a SHORT
-            # For opening: holdSide matches order side (buy=long, sell=short)
-            # For closing: caller MUST pass holdSide = position side
+            # FUTURES PARAMS
+            # One-way mode: no holdSide needed.
+            # For closing: caller passes reduceOnly=True
+            # For opening: just marginMode
             # ==========================================================
             params = params or {}
 
             if market == "futures":
-
                 if "marginMode" not in params:
                     params["marginMode"] = "cross"
-                if "holdSide" not in params:
-                    params["holdSide"] = "long" if side == "buy" else "short"
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
