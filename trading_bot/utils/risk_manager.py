@@ -43,9 +43,16 @@ class RiskManager:
 
         self.db = None
 
-        # 🔥 NEW
         self.max_concurrent_trades = 2
         self.global_stop = False
+
+        # Capital & exposure limits
+        self.MAX_CAPITAL_USAGE = 0.5      # max 50% of capital in margin
+        self.MAX_DAILY_LOSS_PCT = 3.0     # max 3% daily loss -> stop trading
+
+        # Daily loss tracking
+        self._daily_pnl = 0.0             # accumulated PnL % for the day
+        self._daily_reset_date = None     # date of last reset
 
 
 # ==========================================================
@@ -154,8 +161,8 @@ class RiskManager:
                             "side": side,
                             "entry": entry,
                             "size": edata["size"],
-                            "stop_loss": entry * (0.97 if side == "buy" else 1.03),
-                            "take_profit": entry * (1.04 if side == "buy" else 0.96),
+                            "stop_loss": entry * (0.99 if side == "buy" else 1.01),
+                            "take_profit": entry * (1.015 if side == "buy" else 0.985),
                             "created_at": time.time(),
                             "market": "futures",
                         }
@@ -274,15 +281,78 @@ class RiskManager:
 
         return True
 
+# ==========================================================
+# CAPITAL & EXPOSURE CONTROL
+# ==========================================================
+
+    def get_used_margin(self, exchange_positions=None):
+        """Calculate total used margin from exchange positions."""
+        if not exchange_positions:
+            return 0.0
+        total = 0.0
+        for p in exchange_positions:
+            margin = safe_float(p.get("initialMargin") or p.get("margin") or 0)
+            if margin > 0:
+                total += margin
+            else:
+                # Fallback: notional / leverage
+                contracts = safe_float(p.get("contracts"))
+                entry = safe_float(p.get("entryPrice"))
+                leverage = safe_float(p.get("leverage", 10))
+                if contracts > 0 and entry > 0 and leverage > 0:
+                    total += (contracts * entry) / leverage
+        return total
+
+    def check_capital_usage(self, available_balance, exchange_positions=None):
+        """Block new trades if capital usage exceeds MAX_CAPITAL_USAGE."""
+        used_margin = self.get_used_margin(exchange_positions)
+        total = available_balance + used_margin
+        if total <= 0:
+            return True  # can't determine, allow
+        usage = used_margin / total
+        if usage > self.MAX_CAPITAL_USAGE:
+            logger.info(
+                f"[RISK] capital_usage={usage:.1%} > max={self.MAX_CAPITAL_USAGE:.0%} — blocking new trades"
+            )
+            return False
+        return True
+
+    def record_daily_pnl(self, pnl_pct):
+        """Accumulate daily PnL. Resets at midnight."""
+        import datetime as dt
+        today = dt.date.today()
+        if self._daily_reset_date != today:
+            self._daily_pnl = 0.0
+            self._daily_reset_date = today
+        self._daily_pnl += safe_float(pnl_pct)
+
+    def check_daily_loss(self):
+        """Return False if daily loss limit exceeded."""
+        import datetime as dt
+        today = dt.date.today()
+        if self._daily_reset_date != today:
+            self._daily_pnl = 0.0
+            self._daily_reset_date = today
+            return True
+        if self._daily_pnl <= -self.MAX_DAILY_LOSS_PCT:
+            logger.warning(
+                f"[RISK] daily_pnl={self._daily_pnl:.2f}% <= "
+                f"-{self.MAX_DAILY_LOSS_PCT}% — DAILY STOP"
+            )
+            return False
+        return True
 
 # ==========================================================
 # POSITION SIZE
 # ==========================================================
 
-    def compute_position_size(self, balance, price, leverage, risk_pct=None):
+    def compute_position_size(self, balance, price, leverage, risk_pct=None,
+                              exchange_positions=None):
         """
-        Correct position sizing: notional = risk_capital * leverage, size = notional / price.
-        Includes hard safety cap at 80% of max leverage exposure.
+        Correct position sizing with dynamic risk and capital usage cap.
+
+        Dynamic risk_pct: min(configured_risk, available_balance / total_balance * 0.5)
+        This automatically reduces size when capital is already deployed.
 
         Returns dict: {size, notional, required_margin} or None if invalid.
         """
@@ -294,8 +364,21 @@ class RiskManager:
             if balance <= 0 or price <= 0:
                 return None
 
+            # Capital usage check — block if over limit
+            if not self.check_capital_usage(balance, exchange_positions):
+                return None
+
+            # Dynamic risk: scale down as capital usage increases
             if risk_pct is None:
-                risk_pct = safe_float(settings.MAX_RISK_PCT) / 100
+                base_risk = safe_float(settings.MAX_RISK_PCT) / 100
+                used_margin = self.get_used_margin(exchange_positions)
+                total_capital = balance + used_margin
+                if total_capital > 0:
+                    available_ratio = balance / total_capital
+                    risk_pct = min(base_risk, available_ratio * 0.5)
+                    risk_pct = max(risk_pct, 0.005)  # floor at 0.5%
+                else:
+                    risk_pct = base_risk
 
             # Core formula: risk capital * leverage = notional
             risk_capital = balance * risk_pct
@@ -328,6 +411,7 @@ class RiskManager:
                 "size": round(size, 6),
                 "notional": round(notional, 2),
                 "required_margin": round(required_margin, 2),
+                "risk_pct": round(risk_pct, 4),
             }
 
         except Exception as e:
@@ -457,6 +541,14 @@ class RiskManager:
 
                 # Ensure pending lock is also released
                 self._pending_symbols.discard(symbol)
+
+            # Track daily PnL (outside lock — no deadlock risk)
+            self.record_daily_pnl(pnl_pct)
+
+            logger.info(
+                f"[RISK] closed {symbol} pnl={pnl_pct:.2f}% reason={reason} "
+                f"daily_pnl={self._daily_pnl:.2f}%"
+            )
 
         except Exception as e:
 
