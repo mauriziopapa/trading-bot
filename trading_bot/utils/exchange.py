@@ -489,15 +489,10 @@ class BitgetExchange:
 
                 is_closing = params.get("reduceOnly", False)
 
-                params["marginMode"] = "isolated"
-                params["oneWayMode"] = True
-
-                if is_closing:
-                    params["tradeSide"] = "close"
-                    params["reduceOnly"] = True
-                else:
-                    params["tradeSide"] = "open"
-                    params["reduceOnly"] = False
+                params = {
+                    "marginMode": "isolated",
+                    "reduceOnly": bool(is_closing)
+                }
 
             logger.info(f"[BITGET PARAMS] {params}")
             
