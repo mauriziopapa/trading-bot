@@ -27,6 +27,7 @@ from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
 
 from trading_bot.utils.emerging_scanner import EmergingScanner
+from trading_bot.utils.sniper_scanner_v2 import SniperScannerV2
 from trading_bot.utils.regime_detector import RegimeDetector
 from trading_bot.utils.sentiment_analyzer import SentimentAnalyzer
 
@@ -67,7 +68,8 @@ class TradingBot:
         self.db = DB()
         self.profit = ProfitEngine()
 
-        self._emerging = EmergingScanner()
+        self._emerging = EmergingScanner()     # legacy — kept as backup
+        self._scanner = SniperScannerV2()     # primary scanner v2
         self._regime = RegimeDetector()
         self._sentiment = SentimentAnalyzer()
 
@@ -131,6 +133,7 @@ class TradingBot:
             self._start_dashboard()
 
         self.exchange.initialize()
+        self._scanner.set_exchange(self.exchange)
         self.db.connect()
         self.risk.db = self.db
         self._recover_positions_from_exchange()
@@ -353,7 +356,7 @@ class TradingBot:
         try:
 
             # ==================================================
-            # RISK GATE — with balance override + daily loss check
+            # RISK GATE — daily loss + position limit
             # ==================================================
             if not self.risk.check_daily_loss():
                 logger.info("[SKIP] Daily loss limit — no new trades")
@@ -364,38 +367,34 @@ class TradingBot:
                 logger.info("[SKIP] Risk gate blocked trading")
                 return
 
-            coins = self._emerging.scan() or []
-            if not coins:
+            # ==================================================
+            # SNIPER SCANNER V2 — multi-factor pipeline
+            # ==================================================
+            candidates = self._scanner.scan() or []
+            if not candidates:
                 return
 
-            self.runtime["signals"] = coins[:5]
+            self.runtime["signals"] = candidates[:5]
 
             markets = getattr(self.exchange, "_futures_markets", {})
             open_symbols = self.risk.open_symbols()
 
-            for coin in coins[:5]:
+            for coin in candidates[:5]:
 
                 try:
 
-                    symbol = f"{coin['symbol']}/USDT:USDT"
+                    symbol = coin.get("symbol", "")
+
+                    # Scanner v2 returns full futures symbols (BTC/USDT:USDT)
+                    # Legacy scanner returns base only (BTC) — handle both
+                    if ":" not in symbol:
+                        symbol = f"{symbol}/USDT:USDT"
 
                     if symbol not in markets:
                         continue
 
                     if symbol in open_symbols:
-                        logger.info(f"[SKIP] {symbol} already in open trades")
-                        continue
-
-                    # 🔥 anche protezione runtime (importantissima)
-                    if symbol in self.runtime.get("active_symbols", set()):
-                        logger.info(f"[SKIP] {symbol} already active (runtime)")
-                        continue
-
-                    change = coin.get("change", 0)
-                    volume = coin.get("volume", 0)
-
-                    # 🔥 meno restrittivo
-                    if volume < 1_000_000:
+                        logger.info(f"[SKIP] {symbol} already open")
                         continue
 
                     # ==================================================
@@ -420,41 +419,27 @@ class TradingBot:
                             if signal:
                                 break
                         except Exception as e:
-                            logger.info(f"[STRAT ERROR] {symbol} {e}")
+                            logger.debug(f"[STRAT ERROR] {symbol} {e}")
 
                     # ==================================================
-                    # 🔥 FALLBACK MIGLIORATO
+                    # SCANNER DIRECTION FALLBACK
+                    # If strategies produce nothing, use scanner's
+                    # momentum direction as signal (it already computed
+                    # momentum from 20x 1m candles).
                     # ==================================================
                     if not signal:
+                        direction = coin.get("direction", "")
+                        momentum = abs(coin.get("momentum", 0))
+                        score = coin.get("score", 0)
 
-                        last = df["close"].iloc[-1]
-                        prev = df["close"].iloc[-2]
-
-                        ma5 = df["close"].rolling(5).mean().iloc[-1]
-                        ma20 = df["close"].rolling(20).mean().iloc[-1]
-
-                        momentum = (last - prev) / prev
-
-                        # 🔥 filtro più realistico
-                        if abs(momentum) < 0.001:  # 0.1%
-                            continue
-
-                        # LONG momentum
-                        if last > ma5 and momentum > 0:
+                        # Only use scanner direction if score is meaningful
+                        if score >= 20 and momentum >= 0.001:
+                            side = "buy" if direction == "long" else "sell"
                             signal = type("Signal", (), {
                                 "symbol": symbol,
-                                "side": "buy",
-                                "strategy": "sniper_momentum_v2",
-                                "confidence": 0.7
-                            })()
-
-                        # SHORT momentum
-                        elif last < ma5 and momentum < 0:
-                            signal = type("Signal", (), {
-                                "symbol": symbol,
-                                "side": "sell",
-                                "strategy": "sniper_momentum_v2",
-                                "confidence": 0.7
+                                "side": side,
+                                "strategy": "sniper_scanner_v2",
+                                "confidence": min(0.9, 0.5 + score / 200)
                             })()
 
                     # ==================================================
@@ -463,7 +448,8 @@ class TradingBot:
                     if signal:
 
                         logger.info(
-                            f"[ENTRY] {symbol} | {signal.side} | {signal.strategy}"
+                            f"[ENTRY] {symbol} | {signal.side} | {signal.strategy} "
+                            f"| score={coin.get('score', 0):.1f}"
                         )
 
                         self.runtime["signals"].append({
@@ -474,14 +460,14 @@ class TradingBot:
 
                         self._execute_signal(signal)
 
-                        # opzionale: lasciare 1 trade per ciclo
+                        # One trade per scan cycle
                         break
 
                     else:
-                        logger.info(f"[NO SIGNAL] {symbol}")
+                        logger.debug(f"[NO SIGNAL] {symbol}")
 
                 except Exception as inner:
-                    logger.info(f"[SCALP INNER] {inner}")
+                    logger.debug(f"[SCALP INNER] {inner}")
                     continue
 
         except Exception as e:
@@ -495,7 +481,7 @@ class TradingBot:
         try:
 
             # ==================================================
-            # RISK GATE — with balance override + daily loss check
+            # RISK GATE — daily loss + position limit
             # ==================================================
             if not self.risk.check_daily_loss():
                 logger.info("[SKIP] Daily loss limit — no emerging trades")
@@ -506,26 +492,27 @@ class TradingBot:
                 logger.info("[SKIP] Emerging blocked by risk gate")
                 return
 
-            coins = self._emerging.scan() or []
-            if not coins:
+            # Use scanner candidates ranked 5-15 (scalping takes top 5)
+            candidates = self._scanner.scan() or []
+            if len(candidates) <= 5:
                 return
 
             markets = getattr(self.exchange, "_futures_markets", {})
             open_symbols = self.risk.open_symbols()
 
-            for coin in coins[:3]:
+            for coin in candidates[5:10]:
 
-                if coin.get("volume", 0) < 5_000_000:
-                    continue
-
-                symbol = f"{coin['symbol']}/USDT:USDT"
+                symbol = coin.get("symbol", "")
+                if ":" not in symbol:
+                    symbol = f"{symbol}/USDT:USDT"
 
                 if symbol not in markets:
                     continue
 
-                # Position guard — skip if already open
                 if symbol in open_symbols:
-                    logger.info(f"[SKIP] {symbol} already open (emerging)")
+                    continue
+
+                if coin.get("volume", 0) < 5_000_000:
                     continue
 
                 ohlcv = self.exchange.fetch_ohlcv(symbol, "5m", 120, "futures")
@@ -535,11 +522,9 @@ class TradingBot:
                 df = ohlcv_to_df(ohlcv)
 
                 for strat in self.strategies:
-
                     signal = strat.analyze(df, symbol, "futures")
-
                     if signal:
-                        logger.info(f"[EMERGING SIGNAL] {symbol}")
+                        logger.info(f"[EMERGING SIGNAL] {symbol} score={coin.get('score', 0):.1f}")
                         self._execute_signal(signal)
                         break
 

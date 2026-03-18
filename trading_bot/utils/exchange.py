@@ -352,10 +352,24 @@ class BitgetExchange:
 # ==========================================================
 
     def get_top_liquid_symbols(self, limit=20):
-
+        """Return liquid futures symbols. Attempts volume sort if tickers available."""
         symbols = list(self._liquid_symbols)
 
-        # fallback semplice (puoi migliorare con volumi)
+        # Try to sort by 24h volume for better ranking
+        try:
+            if len(symbols) > limit:
+                tickers = self._retry(self.futures.fetch_tickers, symbols[:200])
+                if tickers:
+                    ranked = []
+                    for sym in symbols:
+                        t = tickers.get(sym)
+                        vol = safe_float(t.get("quoteVolume")) if t else 0
+                        ranked.append((sym, vol))
+                    ranked.sort(key=lambda x: x[1], reverse=True)
+                    return [s for s, _ in ranked[:limit]]
+        except Exception:
+            pass
+
         return symbols[:limit]
 
 
