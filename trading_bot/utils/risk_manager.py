@@ -181,6 +181,33 @@ class RiskManager:
 
         return result
 
+    def rebuild(self, normalized_positions):
+        """
+        Full state rebuild from exchange positions list.
+        Replaces all internal state with exchange truth.
+        """
+        with self._lock:
+            self.open_futures.clear()
+            self._pending_symbols.clear()
+            for p in normalized_positions:
+                symbol = p.get("symbol", "")
+                side = p.get("side", "buy")
+                entry = safe_float(p.get("entry"))
+                size = safe_float(p.get("size"))
+                if size <= 0:
+                    continue
+                self.open_futures[symbol] = {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry": entry,
+                    "size": size,
+                    "stop_loss": entry * (0.995 if side == "buy" else 1.005),
+                    "take_profit": entry * (1.005 if side == "buy" else 0.995),
+                    "created_at": time.time(),
+                    "market": "futures",
+                }
+        logger.info(f"[RISK] rebuild: {len(self.open_futures)} positions loaded")
+
 # ==========================================================
 # POSITION SIDE QUERIES (NEW)
 # ==========================================================
@@ -250,19 +277,32 @@ class RiskManager:
 
         return True
 
-    def check_exposure(self, available_balance, exchange_positions=None):
-        """Block new trades if exposure exceeds MAX_CAPITAL_USAGE (60%)."""
-        used_margin = self.get_used_margin(exchange_positions)
-        total = available_balance + used_margin
-        if total <= 0:
-            return True
-        exposure = used_margin / total
+    def check_exposure(self, equity, exchange_positions=None):
+        """Block new trades if exposure (notional/equity) exceeds MAX_CAPITAL_USAGE (60%)."""
+        exposure = self.calculate_exposure(exchange_positions, equity)
         if exposure > self.MAX_CAPITAL_USAGE:
             logger.info(
                 f"[RISK] exposure={exposure:.1%} > max={self.MAX_CAPITAL_USAGE:.0%} — blocked"
             )
             return False
         return True
+
+    def calculate_exposure(self, exchange_positions, equity):
+        """Correct exposure = total_notional / equity. NOT margin-based."""
+        if not exchange_positions or equity <= 0:
+            return 0.0
+        total_notional = 0.0
+        for p in exchange_positions:
+            notional = safe_float(p.get("notional", 0))
+            if notional > 0:
+                total_notional += abs(notional)
+            else:
+                # Fallback: contracts * entry
+                contracts = safe_float(p.get("contracts"))
+                entry = safe_float(p.get("entryPrice"))
+                if contracts > 0 and entry > 0:
+                    total_notional += contracts * entry
+        return total_notional / equity
 
 
     def is_symbol_open(self, symbol):
