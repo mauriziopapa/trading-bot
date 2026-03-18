@@ -472,7 +472,7 @@ class BitgetExchange:
 
             if market == "futures":
                 if "marginMode" not in params:
-                    params["marginMode"] = "cross"
+                    params["marginMode"] = {"marginMode": "isolated","oneWayMode": True}
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
