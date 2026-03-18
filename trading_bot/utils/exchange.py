@@ -468,15 +468,18 @@ class BitgetExchange:
             # ==========================================================
             # FUTURES PARAMS (FIX BITGET)
             # ==========================================================
+
             params = params or {}
 
             if market == "futures":
 
-                # FORZA modalità corretta
-                params["marginMode"] = "isolated"
+                is_closing = params.get("reduceOnly", False)
 
-                # CRITICO per Bitget
-                params["posSide"] = "long" if side == "buy" else "short"
+                params.update({
+                    "marginMode": "isolated",
+                    "posSide": "long" if side == "buy" else "short",
+                    "tradeSide": "close" if is_closing else "open"
+                })
 
             # ==========================================================
             # EXECUTION (RETRY SAFE)
