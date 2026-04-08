@@ -6,6 +6,7 @@ Architecture: Exchange → PRIMARY STATE | Runtime → CACHE | Database → PERS
 """
 
 from __future__ import annotations
+import json
 import time
 from datetime import datetime, timezone
 from loguru import logger
@@ -50,6 +51,10 @@ class Trade(Base):
     pnl_usdt     = Column(Float, nullable=True)
     close_reason = Column(String(32), nullable=True)   # stop_loss | take_profit | manual | trailing
 
+    # Attribution (additive — nullable so existing rows are unaffected)
+    fees_paid       = Column(Float, nullable=True)     # taker fee in USDT
+    signal_snapshot = Column(Text, nullable=True)      # JSON of indicator values at signal time
+
     # Meta
     confidence  = Column(Float, nullable=False)
     atr         = Column(Float, nullable=True)
@@ -87,36 +92,84 @@ class DB:
             Base.metadata.create_all(self.engine)
             self.enabled = True
             logger.info("Database PostgreSQL connesso")
+            # Run additive migrations (idempotent — safe to re-run)
+            self.run_migrations()
         except Exception as e:
             logger.error(f"DB connect error: {e}")
+
+    def run_migrations(self):
+        """Run additive schema migrations. Idempotent — safe to call on every startup."""
+        if not self.enabled:
+            return
+        try:
+            from scripts.migrate_attribution import run as _run_attr
+            _run_attr(self.engine)
+        except ImportError:
+            # scripts/ not on path in production — run inline
+            self._run_inline_migrations()
+        except Exception as e:
+            logger.warning(f"[DB] migration warning: {e}")
+
+    def _run_inline_migrations(self):
+        """Fallback: run migration SQL inline when scripts/ not importable."""
+        from sqlalchemy import text
+        stmts = [
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS fees_paid REAL;",
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS signal_snapshot TEXT;",
+            "CREATE INDEX IF NOT EXISTS ix_trades_opened_at ON trades (opened_at);",
+        ]
+        with self.engine.connect() as conn:
+            for stmt in stmts:
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception as e:
+                    logger.debug(f"[DB] migration stmt skipped: {e}")
 
     def save_trade_open(self, order_id: str, symbol: str, market: str,
                         strategy: str, side: str, entry: float, size: float,
                         stop_loss: float, take_profit: float, confidence: float,
-                        atr: float, notes: str, timeframe: str, leverage: int = 1):
+                        atr: float, notes: str, timeframe: str, leverage: int = 1,
+                        fees_paid: float = None, signal_snapshot: dict = None):
+        """
+        Persist a new open trade.
+
+        strategy MUST be a non-empty, non-'sniper' string. Raises ValueError otherwise
+        to enforce per-strategy attribution at the execution boundary.
+        """
+        if not strategy or strategy.strip().lower() in ("", "sniper"):
+            raise ValueError(
+                f"[DB] save_trade_open: strategy is required and must not be 'sniper', "
+                f"got {strategy!r}. Every trade must be tagged with its originating strategy."
+            )
         if not self.enabled:
             return
         try:
+            snapshot_str = json.dumps(signal_snapshot) if signal_snapshot else None
             with Session(self.engine) as s:
                 trade = Trade(
-                    order_id    = order_id,
-                    symbol      = symbol,
-                    market      = market,
-                    strategy    = strategy,
-                    side        = side,
-                    entry_price = entry,
-                    size        = size,
-                    stop_loss   = stop_loss,
-                    take_profit = take_profit,
-                    confidence  = confidence,
-                    atr         = atr,
-                    notes       = notes,
-                    timeframe   = timeframe,
-                    leverage    = leverage,
-                    is_paper    = not settings.IS_LIVE,
+                    order_id        = order_id,
+                    symbol          = symbol,
+                    market          = market,
+                    strategy        = strategy,
+                    side            = side,
+                    entry_price     = entry,
+                    size            = size,
+                    stop_loss       = stop_loss,
+                    take_profit     = take_profit,
+                    confidence      = confidence,
+                    atr             = atr,
+                    notes           = notes,
+                    timeframe       = timeframe,
+                    leverage        = leverage,
+                    is_paper        = not settings.IS_LIVE,
+                    fees_paid       = fees_paid,
+                    signal_snapshot = snapshot_str,
                 )
                 s.add(trade)
                 s.commit()
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"DB save_trade_open: {e}")
 
@@ -175,7 +228,7 @@ class DB:
 
     def close_position_by_symbol(self, symbol: str, exit_price: float = 0,
                                  pnl_pct: float = 0, pnl_usdt: float = 0,
-                                 reason: str = "closed"):
+                                 reason: str = "closed", fees_paid: float = None):
         """Close an open trade by symbol. Uses SQLAlchemy Session."""
         if not self.enabled:
             return
@@ -193,8 +246,11 @@ class DB:
                     trade.pnl_usdt = pnl_usdt
                     trade.close_reason = reason
                     trade.closed_at = datetime.now(timezone.utc)
+                    # Accumulate fees: entry fee already stored, add exit fee here
+                    if fees_paid is not None:
+                        trade.fees_paid = (trade.fees_paid or 0) + fees_paid
                     s.commit()
-                    logger.info(f"[DB] closed {symbol} reason={reason}")
+                    logger.info(f"[DB] closed {symbol} reason={reason} fees={trade.fees_paid}")
         except Exception as e:
             logger.error(f"[DB] close_position_by_symbol error: {e}")
 

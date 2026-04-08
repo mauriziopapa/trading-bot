@@ -57,6 +57,30 @@ _FIELD_TYPES: dict[str, type] = {
     "EMERGING_MOMENTUM_CHG":  float,   # soglia % change 24h per momentum
     "EMERGING_RISK_MULT":     float,   # moltiplicatore risk per emerging
     "EMERGING_MAX_SPREAD":    float,   # max spread % per entrare
+    # ── Strategy governance ──────────────────────────────────────────────
+    "ENABLE_MOMENTUM":              bool,   # enable MomentumStrategy
+    "STRATEGIES_ENABLED":           str,    # comma-separated allowlist (e.g. "MOMENTUM")
+    # ── Momentum strategy tuning ─────────────────────────────────────────
+    "MOMENTUM_MIN_SCORE":           float,
+    "MOMENTUM_MIN_VOLUME_USD":      float,
+    "MOMENTUM_RISK_PCT":            float,
+    "MOMENTUM_LEVERAGE":            int,
+    "MOMENTUM_MAX_HOLD_SECONDS":    int,
+    "MOMENTUM_MIN_HOLD_SECONDS":    int,
+    "MOMENTUM_SL_ATR_MULT":         float,
+    "MOMENTUM_TP_ATR_MULT":         float,
+    "MOMENTUM_TRAILING_ENABLE":     bool,
+    "MOMENTUM_TRAIL_ACTIVATION_R":  float,
+    "MOMENTUM_TRAIL_DIST_ATR":      float,
+    "MOMENTUM_COOLDOWN_LOSS_MIN":   int,
+    "MOMENTUM_COOLDOWN_WIN_MIN":    int,
+    "MOMENTUM_MAX_CONCURRENT":      int,
+    # ── Risk manager extras ──────────────────────────────────────────────
+    "MANUAL_UNLOCK_REQUIRED":           bool,
+    "PER_SYMBOL_MAX_LOSS_USDT":         float,
+    "PER_SYMBOL_MAX_CONSEC_LOSSES":     int,
+    "PER_STRATEGY_MAX_DRAWDOWN_PCT":    float,
+    "STALE_GLOBAL_STOP_ALERT_MIN":      int,
 }
 _RUNTIME_FIELDS = set(_FIELD_TYPES.keys())
 

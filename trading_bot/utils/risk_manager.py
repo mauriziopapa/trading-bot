@@ -45,6 +45,8 @@ class RiskManager:
 
         self.MAX_POSITIONS = 2             # HARD LIMIT — absolute, no override
         self.global_stop = False
+        self._global_stop_reason: str = ""
+        self._global_stop_since: float = 0.0   # epoch seconds, set when global_stop triggers
 
         # Capital & exposure limits
         self.MAX_CAPITAL_USAGE = 0.6      # max 60% of capital in margin
@@ -320,11 +322,44 @@ class RiskManager:
         max_dd = safe_float(getattr(settings, "MAX_DRAWDOWN_PCT", 20))
 
         if drawdown > max_dd:
+            if not self.global_stop:
+                self._global_stop_reason = f"drawdown {drawdown:.1f}% > max {max_dd}%"
+                self._global_stop_since = time.time()
             self.global_stop = True
             logger.error(f"[RISK] GLOBAL STOP — drawdown {drawdown:.1f}% > max {max_dd}%")
             return False
 
         return True
+
+    def get_block_reason(self) -> str:
+        """Return a human-readable reason why trading is currently blocked, or 'ok'."""
+        if self.global_stop:
+            reason = self._global_stop_reason or "unknown"
+            age_min = (time.time() - self._global_stop_since) / 60 if self._global_stop_since else 0
+            return f"global_stop({reason}, active {age_min:.1f}min)"
+
+        with self._lock:
+            open_count = len(self.open_futures)
+        if open_count >= self.MAX_POSITIONS:
+            return f"hard_limit({open_count}/{self.MAX_POSITIONS} positions)"
+
+        return "ok"
+
+    def global_stop_age_minutes(self) -> float:
+        """Return how many minutes global_stop has been active (0 if not active)."""
+        if not self.global_stop or not self._global_stop_since:
+            return 0.0
+        return (time.time() - self._global_stop_since) / 60
+
+    def manual_unlock(self, reason: str = ""):
+        """
+        Runtime-only unlock of global_stop. Resets all stop state.
+        Does NOT persist — caller must ensure legitimacy (e.g. MANUAL_UNLOCK_REQUIRED check).
+        """
+        self.global_stop = False
+        self._global_stop_reason = ""
+        self._global_stop_since = 0.0
+        logger.warning(f"[MANUAL UNLOCK] global_stop reset, reason={reason!r}")
 
 # ==========================================================
 # CAPITAL & EXPOSURE CONTROL

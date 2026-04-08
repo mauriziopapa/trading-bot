@@ -25,6 +25,7 @@ from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
+from trading_bot.strategies.momentum import MomentumStrategy
 
 from trading_bot.utils.emerging_scanner import EmergingScanner
 from trading_bot.utils.sniper_scanner_v2 import SniperScannerV2
@@ -102,12 +103,17 @@ class TradingBot:
             "DOGE/USDT:USDT"
         ]
 
-        self.strategies = [
-            ScalpingStrategy(),
-            BreakoutStrategy(),
-            RSIMACDStrategy(),
-            BollingerStrategy()
-        ]
+        # All strategy instances — which ones actually run is controlled by
+        # STRATEGIES_ENABLED in bot_config (enforced in _get_enabled_strategies)
+        self._all_strategies = {
+            "SCALPING":  ScalpingStrategy(),
+            "BREAKOUT":  BreakoutStrategy(),
+            "RSI_MACD":  RSIMACDStrategy(),
+            "BOLLINGER": BollingerStrategy(),
+            "MOMENTUM":  MomentumStrategy(),
+        }
+        # Legacy alias (used by some internal paths that iterate self.strategies)
+        self.strategies = list(self._all_strategies.values())
 
         self.runtime = {
             "signals": [],
@@ -138,6 +144,8 @@ class TradingBot:
         self.risk.db = self.db
         self._recover_positions_from_exchange()
 
+        # Log which strategies are active (paper guard)
+        self._log_active_strategies()
         self._notify_startup()
         self._setup_scheduler()
 
@@ -295,6 +303,37 @@ class TradingBot:
 
 
 # ==========================================================
+# STRATEGY GUARD
+# ==========================================================
+
+    def _get_enabled_strategies(self) -> list:
+        """
+        Return only strategy instances whose NAME is in STRATEGIES_ENABLED config.
+        Logs a [REFACTOR-GUARD] warning for every disabled strategy that tries to run.
+        Defaults to MOMENTUM-only if STRATEGIES_ENABLED not set.
+        """
+        raw = str(getattr(settings, "STRATEGIES_ENABLED", "MOMENTUM"))
+        enabled_names = {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+        active = []
+        for name, strat in self._all_strategies.items():
+            if name in enabled_names:
+                active.append(strat)
+            else:
+                logger.debug(
+                    f"[REFACTOR-GUARD] {name} not in STRATEGIES_ENABLED={enabled_names} — skipped"
+                )
+        return active
+
+    def _log_active_strategies(self):
+        enabled = [s.NAME for s in self._get_enabled_strategies()]
+        mode = "PAPER" if not settings.IS_LIVE else "LIVE"
+        logger.info(f"[STRATEGY GUARD] mode={mode} active_strategies={enabled}")
+        if enabled == ["MOMENTUM"]:
+            logger.info("[MOMENTUM strategy active, others disabled]")
+
+
+# ==========================================================
 # SCHEDULER
 # ==========================================================
 
@@ -304,9 +343,26 @@ class TradingBot:
         schedule.every(2).minutes.do(self._scan_emerging)
         schedule.every(20).seconds.do(self._monitor_positions)
         schedule.every(2).minutes.do(self._update_sentiment)
+        schedule.every().day.at("00:00").do(self._send_daily_report)
 
         if DASHBOARD_ENABLED:
             schedule.every(10).seconds.do(self._update_dashboard)
+
+
+# ==========================================================
+# DAILY REPORT
+# ==========================================================
+
+    def _send_daily_report(self):
+        try:
+            from trading_bot.reporting.strategy_report import daily_strategy_report, format_daily_report
+            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+            report = daily_strategy_report(self.db, days=1)
+            mode = "live" if settings.IS_LIVE else "paper"
+            msg = format_daily_report(report, balance, mode)
+            self.notifier.daily_report_v2(msg)
+        except Exception as e:
+            logger.error(f"[DAILY REPORT] {e}")
 
 
 # ==========================================================
@@ -409,38 +465,28 @@ class TradingBot:
                         continue
 
                     signal = None
+                    enabled_strats = self._get_enabled_strategies()
 
                     # ==================================================
-                    # STRATEGY ENGINE
+                    # STRATEGY ENGINE — only enabled strategies run
                     # ==================================================
-                    for strat in self.strategies:
+                    for strat in enabled_strats:
                         try:
-                            signal = strat.analyze(df, symbol, "futures")
+                            # MomentumStrategy gets extra scanner context
+                            if strat.NAME == "MOMENTUM":
+                                signal = strat.analyze(
+                                    df, symbol, "futures",
+                                    scanner_score=coin.get("score", 0),
+                                    scanner_direction=coin.get("direction", ""),
+                                    scanner_momentum=coin.get("momentum", 0),
+                                    scanner_volume=coin.get("volume", 0),
+                                )
+                            else:
+                                signal = strat.analyze(df, symbol, "futures")
                             if signal:
                                 break
                         except Exception as e:
-                            logger.debug(f"[STRAT ERROR] {symbol} {e}")
-
-                    # ==================================================
-                    # SCANNER DIRECTION FALLBACK
-                    # If strategies produce nothing, use scanner's
-                    # momentum direction as signal (it already computed
-                    # momentum from 20x 1m candles).
-                    # ==================================================
-                    if not signal:
-                        direction = coin.get("direction", "")
-                        momentum = abs(coin.get("momentum", 0))
-                        score = coin.get("score", 0)
-
-                        # Only use scanner direction if score is meaningful
-                        if score >= 20 and momentum >= 0.001:
-                            side = "buy" if direction == "long" else "sell"
-                            signal = type("Signal", (), {
-                                "symbol": symbol,
-                                "side": side,
-                                "strategy": "sniper_scanner_v2",
-                                "confidence": min(0.9, 0.5 + score / 200)
-                            })()
+                            logger.debug(f"[STRAT ERROR] {symbol} {strat.NAME} {e}")
 
                     # ==================================================
                     # EXECUTION
@@ -521,12 +567,30 @@ class TradingBot:
 
                 df = ohlcv_to_df(ohlcv)
 
-                for strat in self.strategies:
-                    signal = strat.analyze(df, symbol, "futures")
-                    if signal:
-                        logger.info(f"[EMERGING SIGNAL] {symbol} score={coin.get('score', 0):.1f}")
-                        self._execute_signal(signal)
-                        break
+                signal = None
+                enabled_strats = self._get_enabled_strategies()
+
+                for strat in enabled_strats:
+                    try:
+                        if strat.NAME == "MOMENTUM":
+                            signal = strat.analyze(
+                                df, symbol, "futures",
+                                scanner_score=coin.get("score", 0),
+                                scanner_direction=coin.get("direction", ""),
+                                scanner_momentum=coin.get("momentum", 0),
+                                scanner_volume=coin.get("volume", 0),
+                            )
+                        else:
+                            signal = strat.analyze(df, symbol, "futures")
+                        if signal:
+                            break
+                    except Exception as e:
+                        logger.debug(f"[STRAT ERROR] {symbol} {strat.NAME} {e}")
+
+                if signal:
+                    logger.info(f"[EMERGING SIGNAL] {symbol} score={coin.get('score', 0):.1f}")
+                    self._execute_signal(signal)
+                    break
 
         except Exception as e:
             logger.error(f"[EMERGING] {e}")
@@ -549,7 +613,17 @@ class TradingBot:
 
             symbol = signal.symbol
             side = signal.side
-            strategy = getattr(signal, "strategy", "sniper")
+            strategy = getattr(signal, "strategy", "") or "UNKNOWN"
+
+            # ==================================================
+            # PAPER GUARD — belt-and-suspenders for MOMENTUM
+            # Primary control is TRADING_MODE=paper env var
+            # ==================================================
+            if getattr(settings, "IS_LIVE", False) and strategy == "MOMENTUM":
+                logger.warning(
+                    "[PAPER-GUARD] IS_LIVE=True but MOMENTUM strategy — "
+                    "primary control is TRADING_MODE env var; verify paper mode is set"
+                )
 
             # ==================================================
             # SIGNAL DEDUP — prevent executing same signal twice
@@ -677,7 +751,8 @@ class TradingBot:
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "created_at": time.time(),
-                    "market": "futures"
+                    "market": "futures",
+                    "strategy": strategy,
                 }
 
                 # register_open releases the pending lock internally
@@ -688,6 +763,7 @@ class TradingBot:
                 # Persist to DB
                 try:
                     order_id = order.get("id", f"ord_{int(time.time())}_{symbol}")
+                    entry_fees = notional * 0.0006   # Bitget taker ~0.06%
                     self.db.save_trade_open(
                         order_id=order_id,
                         symbol=symbol, market="futures", strategy=strategy,
@@ -695,13 +771,17 @@ class TradingBot:
                         stop_loss=trade["stop_loss"],
                         take_profit=trade["take_profit"],
                         confidence=getattr(signal, "confidence", 0.7),
-                        atr=0, notes="", timeframe="1m",
+                        atr=getattr(signal, "atr", 0) or 0,
+                        notes=getattr(signal, "notes", "") or "",
+                        timeframe=getattr(signal, "timeframe", "1m") or "1m",
                         leverage=leverage,
+                        fees_paid=entry_fees,
+                        signal_snapshot=getattr(signal, "_snapshot", None),
                     )
                 except Exception as db_err:
                     logger.warning(f"[DB] save_trade_open failed: {db_err}")
 
-                self.notifier.trade_opened(
+                self.notifier.trade_opened_v2(
                     symbol=symbol,
                     side=side,
                     entry=price,
@@ -710,7 +790,9 @@ class TradingBot:
                     take_profit=trade["take_profit"],
                     market="futures",
                     strategy=strategy,
-                    confidence=getattr(signal, "confidence", 0.7)
+                    confidence=getattr(signal, "confidence", 0.7),
+                    fees_estimated=entry_fees,
+                    atr=getattr(signal, "atr", 0) or 0,
                 )
 
                 logger.info(f"[TRADE OPEN] {symbol}")
@@ -752,11 +834,27 @@ class TradingBot:
             self.risk.update_balance(balance)
             self.risk.check_global_risk(balance)
 
+            # ==================================================
+            # STALE GLOBAL STOP ALERT
+            # ==================================================
+            if self.risk.global_stop:
+                age_min = self.risk.global_stop_age_minutes()
+                threshold = float(getattr(settings, "STALE_GLOBAL_STOP_ALERT_MIN", 15))
+                if age_min >= threshold and not getattr(self, "_stale_stop_alerted", False):
+                    self.notifier.stale_global_stop_alert(age_min, self.risk._global_stop_reason)
+                    self._stale_stop_alerted = True
+                    logger.warning(
+                        f"[RISK] stale global_stop alert sent — active {age_min:.1f}min"
+                    )
+            elif getattr(self, "_stale_stop_alerted", False):
+                self._stale_stop_alerted = False   # reset when global_stop clears
+
             exposure = self.risk.calculate_exposure(exchange_positions, balance)
 
             logger.info(
                 f"[STATE] positions={len(open_trades)} "
                 f"balance={balance:.2f} exposure={exposure:.2f} "
+                f"block={self.risk.get_block_reason()} "
                 f"symbols={list(self.risk.open_futures.keys())}"
             )
 
@@ -1064,19 +1162,24 @@ class TradingBot:
 
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
 
+            exit_fees = real_size * price * 0.0006 if entry > 0 else 0.0  # Bitget taker fee on notional
+
             try:
                 self.db.close_position_by_symbol(
                     symbol=symbol, exit_price=price,
                     pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
+                    fees_paid=exit_fees,
                 )
             except Exception as db_err:
                 logger.warning(f"[DB] close failed: {db_err}")
 
-            self.notifier.trade_closed(
+            self.notifier.trade_closed_v2(
                 symbol=symbol, side=trade["side"],
                 entry=entry, exit_price=price,
                 pnl_pct=pnl_pct, pnl_usdt=pnl_usdt,
-                reason=reason, market="futures"
+                reason=reason, market="futures",
+                strategy=trade.get("strategy", ""),
+                fees_paid=exit_fees,
             )
 
             logger.info(
