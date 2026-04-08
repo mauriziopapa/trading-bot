@@ -24,7 +24,16 @@ import numpy as np
 from loguru import logger
 
 from trading_bot.strategies.base import BaseStrategy, Signal
+from trading_bot.strategies.conviction import calculate_conviction
+from trading_bot.strategies.persistence_filter import MomentumPersistenceFilter
+from trading_bot.strategies.laddered_cooldown import LadderedCooldown
 from trading_bot.config import settings
+
+
+# CWPE persistence requirement — number of consecutive scan cycles a signal
+# must survive in the same direction before we trust it. Exposed as a
+# module-level constant so it can also appear in signal_snapshot attribution.
+CWPE_PERSISTENCE_CYCLES_REQUIRED = 2
 
 
 def _safe_float(x, default=0.0):
@@ -67,6 +76,14 @@ class MomentumStrategy(BaseStrategy):
         "tp_atr_mult":  ("MOMENTUM_TP_ATR_MULT",     2.5),
         "leverage":     ("MOMENTUM_LEVERAGE",         2),
     }
+
+    # ── CWPE experimental state (class-level, shared across instances) ───────
+    # A singleton MomentumStrategy is held in BotOrchestrator._all_strategies,
+    # so a class-level attribute is effectively a process-wide shared state.
+    _persistence_filter = MomentumPersistenceFilter(
+        required_cycles=CWPE_PERSISTENCE_CYCLES_REQUIRED
+    )
+    _cooldown = LadderedCooldown()
 
     def _cfg(self, key: str) -> float:
         cfg_key, default = self._CFG[key]
@@ -209,6 +226,70 @@ class MomentumStrategy(BaseStrategy):
                 )
                 return None
 
+            # ════════════════════════════════════════════════════════════════
+            # CWPE layer (experimental): persistence filter → cooldown gate
+            #                            → conviction score + tier check
+            # Runs AFTER all hard reject gates (scanner, EMA, MACD, ATR, EV)
+            # and BEFORE Signal construction. Rejection here is silent-ish
+            # (INFO log, no alert) because these are expected early-cycle drops.
+            # ════════════════════════════════════════════════════════════════
+            cwpe_direction = (
+                scanner_direction
+                if scanner_direction in ("long", "short")
+                else ("long" if side == "buy" else "short")
+            )
+
+            # 1) Persistence: record this cycle's observation then require it
+            #    to match `required_cycles` consecutive same-direction records.
+            MomentumStrategy._persistence_filter.record_signal(
+                symbol, cwpe_direction, scanner_score
+            )
+            if not MomentumStrategy._persistence_filter.is_persistent(
+                symbol, cwpe_direction
+            ):
+                logger.info(f"[CWPE] {symbol} not persistent yet")
+                return None
+
+            # 2) Laddered cooldown: halts or throttles after CWPE losses.
+            cwpe_allowed, cwpe_reason = MomentumStrategy._cooldown.can_trade()
+            if not cwpe_allowed:
+                logger.info(f"[CWPE] blocked: {cwpe_reason}")
+                return None
+
+            # 3) Conviction score → tier + sizing decision.
+            current_volume = (
+                _safe_float(df["volume"].iloc[-1])
+                if "volume" in df.columns
+                else 0.0
+            )
+            avg_volume_20 = (
+                _safe_float(df["volume"].rolling(20).mean().iloc[-1])
+                if "volume" in df.columns and len(df) >= 20
+                else 0.0
+            )
+            macd_hist_prev = (
+                _safe_float(hist.iloc[-2]) if len(hist) >= 2 else 0.0
+            )
+            # BTC regime fetch is deferred to a future main.py task — pass
+            # 'neutral' so the component scores a safe 50/100.
+            conviction = calculate_conviction(
+                scanner_score=scanner_score,
+                direction=cwpe_direction,
+                ema8=_safe_float(ema8.iloc[-1]),
+                ema21=_safe_float(ema21.iloc[-1]),
+                macd_hist=_safe_float(hist.iloc[-1]),
+                macd_hist_prev=macd_hist_prev,
+                current_volume=current_volume,
+                avg_volume=avg_volume_20,
+                atr_pct=atr_pct,
+                btc_regime="neutral",
+            )
+            if conviction.tier == "reject":
+                logger.info(
+                    f"[CWPE] {symbol} conviction={conviction.total:.1f} tier=reject"
+                )
+                return None
+
             if side == "buy":
                 stop_loss   = entry - sl_mult * atr_val
                 take_profit = entry + tp_mult * atr_val
@@ -313,15 +394,38 @@ class MomentumStrategy(BaseStrategy):
             )
             # Attach snapshot for persistence in _execute_signal
             sig._snapshot = signal_snapshot
+            # CWPE: attach sizing decision so _execute_signal can override risk
+            sig.size_multiplier = conviction.size_multiplier
+            sig.risk_pct_override = conviction.risk_pct
 
             logger.info(
                 f"[MOMENTUM] {symbol} {side} entry={entry:.6f} "
                 f"sl={stop_loss:.6f} tp={take_profit:.6f} "
                 f"atr={atr_val:.6f} conf={confidence:.0f} "
-                f"score={scanner_score:.1f} confirmed={both_confirmed}"
+                f"score={scanner_score:.1f} confirmed={both_confirmed} "
+                f"cwpe_tier={conviction.tier} "
+                f"cwpe_total={conviction.total:.1f}"
             )
             return sig
 
         except Exception as e:
             logger.error(f"[MOMENTUM] {symbol} analyze error: {e}")
             return None
+
+    # ────────────────────────────────────────────────────────────────────
+    # CWPE: trade-closed notification hook
+    # ────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def notify_trade_closed(cls, pnl: float, was_conviction_play: bool) -> None:
+        """
+        Called by BotOrchestrator._close_position after a MOMENTUM trade
+        finalizes. Feeds the outcome into the laddered cooldown ladder so
+        loss streaks progressively throttle or halt the bot.
+        """
+        try:
+            cls._cooldown.record_trade_result(
+                pnl=float(pnl), was_conviction_play=bool(was_conviction_play)
+            )
+        except Exception as e:
+            logger.warning(f"[CWPE] notify_trade_closed error: {e}")

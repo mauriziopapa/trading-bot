@@ -708,8 +708,23 @@ class TradingBot:
                 # POSITION SIZING — dynamic risk + capital usage cap
                 # (balance and exchange_positions already fetched above)
                 # ==================================================
+                # CWPE: if the strategy attached a risk_pct_override (a percent
+                # in the 1-3 range derived from the conviction tier), honor it
+                # but clamp to the 3% HARD cap. Otherwise fall back to the
+                # configured MOMENTUM_RISK_PCT. compute_position_size expects a
+                # fraction (0.01 = 1%), so convert at the call boundary.
+                override_pct = getattr(signal, "risk_pct_override", None)
+                if override_pct is not None and override_pct > 0:
+                    effective_risk_pct = float(override_pct)
+                else:
+                    effective_risk_pct = safe_float(
+                        getattr(settings, "MOMENTUM_RISK_PCT", 1.0)
+                    )
+                effective_risk_pct = min(effective_risk_pct, 3.0)  # HARD CAP
+
                 sizing = self.risk.compute_position_size(
                     balance=balance, price=price, leverage=leverage,
+                    risk_pct=effective_risk_pct / 100.0,
                     exchange_positions=exchange_positions,
                 )
                 if sizing is None:
@@ -743,6 +758,13 @@ class TradingBot:
                     stop_loss = price * 1.005
                     take_profit = price * 0.995
 
+                # CWPE: capture the tier assigned at entry so _close_position
+                # can feed the outcome into the laddered cooldown at close time.
+                _snap = getattr(signal, "_snapshot", None) or {}
+                conviction_tier_at_open = (
+                    _snap.get("conviction_tier", "") if isinstance(_snap, dict) else ""
+                )
+
                 trade = {
                     "symbol": symbol,
                     "side": side,
@@ -753,6 +775,7 @@ class TradingBot:
                     "created_at": time.time(),
                     "market": "futures",
                     "strategy": strategy,
+                    "conviction_tier": conviction_tier_at_open,
                 }
 
                 # register_open releases the pending lock internally
@@ -1155,6 +1178,20 @@ class TradingBot:
                 pnl_pct = 0
 
             pnl_usdt = pnl_pct / 100 * real_size * entry
+
+            # ==================================================
+            # CWPE: feed outcome into the laddered cooldown ladder
+            # (only for MOMENTUM trades; errors must never block close).
+            # The tier assigned at entry is stored on the in-memory trade
+            # dict so we do not need a DB round-trip here.
+            # ==================================================
+            try:
+                if trade.get("strategy") == "MOMENTUM":
+                    was_conviction = trade.get("conviction_tier") == "conviction_play"
+                    from trading_bot.strategies.momentum import MomentumStrategy
+                    MomentumStrategy.notify_trade_closed(pnl_usdt, was_conviction)
+            except Exception as cwpe_err:
+                logger.warning(f"[CWPE] notify_trade_closed failed: {cwpe_err}")
 
             # ==================================================
             # ALWAYS UPDATE STATE — even if verify failed
