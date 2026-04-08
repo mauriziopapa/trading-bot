@@ -12,6 +12,11 @@ Required checks (must all PASS before push):
   8.  MomentumStrategy.analyze() returns Signal when scanner_score >= threshold
   9.  fees_paid at entry = notional * 0.0006 (Bitget taker estimate)
   10. is_paper=True when TRADING_MODE=paper (is_paper=False when TRADING_MODE=live)
+  11. MomentumStrategy rejects when EMA does not confirm scanner
+  12. MomentumStrategy rejects when MACD does not confirm scanner
+  13. MomentumStrategy rejects when ATR < 0.5% of price
+  14. MomentumStrategy rejects when ATR > 5% of price
+  15. MomentumStrategy rejects when expected_profit < 3x fees
 
 Usage:
     python scripts/smoke_test_attribution.py
@@ -247,7 +252,9 @@ def run():
     if sig_above:
         _check("8b. Signal.strategy='MOMENTUM'", sig_above.strategy == "MOMENTUM")
         _check("8c. Signal has _snapshot dict", isinstance(getattr(sig_above, "_snapshot", None), dict))
-        _check("8d. _snapshot contains 'atr'", "atr" in (sig_above._snapshot or {}))
+        _check("8d. _snapshot contains 'atr_value'", "atr_value" in (sig_above._snapshot or {}))
+        _check("8e. _snapshot entry_reason='scanner+ema+macd'",
+               sig_above._snapshot.get("entry_reason") == "scanner+ema+macd")
         print(f"         → signal: side={sig_above.side} conf={sig_above.confidence:.0f} "
               f"entry={sig_above.entry:.4f}")
     else:
@@ -284,6 +291,94 @@ def run():
 
     # Restore original env
     os.environ.pop("TRADING_MODE", None)
+
+    # ── Checks 11-15: MomentumStrategy rejection gates ───────────────────────
+    # Each test crafts synthetic OHLCV that triggers exactly one rejection reason.
+
+    def _make_df(highs, lows, closes):
+        return pd.DataFrame({
+            "open":   closes,
+            "high":   highs,
+            "low":    lows,
+            "close":  closes,
+            "volume": np.full(len(closes), 1.5e6),
+        })
+
+    strat2 = MomentumStrategy()
+
+    # ── Check 11: EMA does NOT confirm scanner direction ─────────────────────
+    # Scanner says "long" but closes are strongly downtrending → ema8 < ema21
+    n = 60
+    closes_down = np.linspace(100.0, 92.0, n)
+    df_down = _make_df(closes_down + 0.5, closes_down - 0.5, closes_down)
+    sig_11 = strat2.analyze(
+        df_down, "TEST11/USDT:USDT", "futures",
+        scanner_score=80.0, scanner_direction="long",
+        scanner_volume=10_000_000,
+    )
+    _check("11. EMA not confirming scanner → None", sig_11 is None)
+
+    # ── Check 12: MACD does NOT confirm scanner direction (EMA still does) ───
+    # Strong uptrend that flattens at the end. EMA8 stays > EMA21 (inertia),
+    # but the MACD histogram flips negative as momentum decelerates.
+    closes_12 = np.concatenate([
+        np.linspace(100.0, 115.0, 45),    # strong uptrend
+        np.linspace(115.0, 112.5, 15),    # decelerate + slight pullback
+    ])
+    df_12 = _make_df(closes_12 + 0.3, closes_12 - 0.3, closes_12)
+    sig_12 = strat2.analyze(
+        df_12, "TEST12/USDT:USDT", "futures",
+        scanner_score=80.0, scanner_direction="long",
+        scanner_volume=10_000_000,
+    )
+    _check("12. MACD not confirming scanner → None", sig_12 is None,
+           f"sig={sig_12}")
+
+    # ── Check 13: ATR too low (< 0.5% of price) ──────────────────────────────
+    # Monotonic gentle uptrend so EMA+MACD both confirm LONG, but bar spread
+    # is tiny (< 0.1) → ATR ≈ 0.04 on price 100 → atr_pct ≈ 0.04% << 0.5%
+    closes_13 = np.linspace(100.0, 100.20, n)        # +0.2% total, each bar ~0.003
+    df_13 = _make_df(closes_13 + 0.02, closes_13 - 0.02, closes_13)
+    sig_13 = strat2.analyze(
+        df_13, "TEST13/USDT:USDT", "futures",
+        scanner_score=80.0, scanner_direction="long",
+        scanner_volume=10_000_000,
+    )
+    _check("13. ATR < 0.5% of price → None", sig_13 is None)
+
+    # ── Check 14: ATR too high (> 5% of price) ───────────────────────────────
+    # Large bars: high-low spread = 10 around price 100 → atr_pct ~ 10%
+    closes_14 = np.linspace(100.0, 105.0, n)      # mild uptrend (for EMA confirm)
+    highs_14  = closes_14 + 6.0                    # huge spread → huge ATR
+    lows_14   = closes_14 - 6.0
+    df_14 = _make_df(highs_14, lows_14, closes_14)
+    sig_14 = strat2.analyze(
+        df_14, "TEST14/USDT:USDT", "futures",
+        scanner_score=80.0, scanner_direction="long",
+        scanner_volume=10_000_000,
+    )
+    _check("14. ATR > 5% of price → None", sig_14 is None)
+
+    # ── Check 15: Expected-value < 3x fees ───────────────────────────────────
+    # Default tp_mult=2.5 and atr_pct>=0.5% always pass EV gate.
+    # Force tp_mult=0.5 via instance monkey-patch, plus atr_pct ~0.6% → EV fails.
+    closes_15 = np.linspace(100.0, 102.5, n)      # gentle uptrend
+    df_15 = _make_df(closes_15 + 0.3, closes_15 - 0.3, closes_15)  # atr_pct ~0.6%
+    strat_ev = MomentumStrategy()
+    _orig_cfg = strat_ev._cfg
+
+    def _patched_cfg(key, _orig=_orig_cfg):
+        if key == "tp_atr_mult":
+            return 0.5   # 0.5 * 0.6% = 0.3% < 0.36% → EV rejected
+        return _orig(key)
+
+    strat_ev._cfg = _patched_cfg
+    sig_15 = strat_ev.analyze(
+        df_15, "TEST15/USDT:USDT", "futures",
+        scanner_score=80.0, scanner_direction="long",
+        scanner_volume=10_000_000,
+    )
+    _check("15. expected_profit < 3x fees → None", sig_15 is None)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     total = _pass + _fail
