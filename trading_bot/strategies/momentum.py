@@ -35,6 +35,27 @@ def _safe_float(x, default=0.0):
 
 
 class MomentumStrategy(BaseStrategy):
+    """
+    Scanner-primary momentum strategy with mandatory dual confirmation.
+
+    Design rationale:
+    - SniperScannerV2 is the primary filter (scanner_score >= MOMENTUM_MIN_SCORE
+      is a hard gate, non-negotiable).
+    - EMA8/21 cross AND MACD histogram must BOTH confirm the scanner direction.
+      Partial confirmation is not accepted — this is a mandatory dual gate after
+      analysis showed the previous bot lost 72% of capital to fee burn from
+      low-conviction entries.
+    - ATR range gate: reject setups with ATR < 0.5% (insufficient room for R:R)
+      or ATR > 5% (position sizing becomes unsafe).
+    - Expected-value gate: reject setups where expected profit (based on ATR *
+      TP multiplier) is less than 3x the round-trip fee estimate. Fee-negative
+      entries are the original bug and must not recur.
+
+    All rejections are logged with specific reason codes for post-mortem analysis.
+    Signal snapshots include full scanner+EMA+MACD+ATR context for backtesting
+    and strategy attribution reporting.
+    """
+
     NAME = "MOMENTUM"
     MIN_CANDLES = 30
 
