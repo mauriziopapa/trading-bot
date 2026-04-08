@@ -375,6 +375,21 @@ class MomentumStrategy(BaseStrategy):
                 "both_confirmed":         bool(both_confirmed),
                 "entry_reason":           entry_reason,
 
+                # CWPE layer: conviction score + tier + per-component breakdown
+                "conviction_total":            conviction.total,
+                "conviction_tier":             conviction.tier,
+                "conviction_size_multiplier":  conviction.size_multiplier,
+                "conviction_risk_pct":         conviction.risk_pct,
+                "conviction_breakdown": {
+                    "scanner":     conviction.scanner,
+                    "ema":         conviction.ema,
+                    "macd":        conviction.macd,
+                    "volume":      conviction.volume,
+                    "atr":         conviction.atr,
+                    "btc_regime":  conviction.btc_regime,
+                },
+                "persistence_cycles_required": CWPE_PERSISTENCE_CYCLES_REQUIRED,
+
                 # Timestamps
                 "signal_timestamp":       datetime.now(timezone.utc).isoformat(),
             }
