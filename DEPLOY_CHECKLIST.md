@@ -45,6 +45,26 @@ Do NOT switch to live trading until:
 - [ ] Zero unexpected exceptions in Railway logs
 - [ ] No [MOMENTUM REJECT] storm (< 95% rejection rate = strategy is too tight)
 
+## CWPE-specific paper validation (48h minimum)
+
+Expected behavior in paper mode:
+- Total trades 48h: 4-20 (less = over-selective, more = persistence broken)
+- Conviction tier distribution from logs:
+  - reject: >60% of scanner candidates
+  - normal: 20-35%
+  - amplified: 5-15%
+  - high: 1-5%
+  - conviction_play: 0-2 total
+- Zero instances of effective_risk_pct > 3.0 (hard cap working)
+- Zero LadderedCooldown halts unless strategy genuinely failing
+- At least some "[CWPE] not persistent yet" log entries (filter active)
+
+Tuning rules:
+- If 0 trades after 24h → lower MOMENTUM_MIN_SCORE from 20 to 15 in bot_config
+- If >25 trades in 24h → raise conviction reject threshold from 60 to 65 in conviction.py
+- If all trades are "normal" tier (no amplified/high) → scanner scores too low, check SniperScannerV2 output
+- If conviction_play fires more than 2x/day → tighten threshold from 93 to 95
+
 ## If validation gates pass
 
 - [ ] Switch Railway env var `TRADING_MODE=live`
