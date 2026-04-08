@@ -18,6 +18,7 @@ Designed for paper mode validation only.
 """
 
 from typing import Optional
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from loguru import logger
@@ -64,15 +65,19 @@ class MomentumStrategy(BaseStrategy):
         scanner_direction: str = "",
         scanner_momentum: float = 0.0,
         scanner_volume: float = 0.0,
+        scanner_change_24h: float = 0.0,
+        scanner_source: str = "sniper_v2",
     ) -> Optional[Signal]:
         """
         Generate a MOMENTUM signal.
 
         Extra kwargs (from _scan_scalping in main.py):
-            scanner_score:     SniperScannerV2 composite score
-            scanner_direction: "long" or "short"
-            scanner_momentum:  raw momentum value from scanner
-            scanner_volume:    24h volume from scanner
+            scanner_score:      SniperScannerV2 composite score
+            scanner_direction:  "long" or "short"
+            scanner_momentum:   raw momentum value from scanner
+            scanner_volume:     24h volume from scanner (USDT)
+            scanner_change_24h: 24h price change percent from scanner
+            scanner_source:     scanner identifier ("sniper_v2")
         """
         try:
             if df is None or len(df) < self.MIN_CANDLES:
@@ -157,28 +162,86 @@ class MomentumStrategy(BaseStrategy):
                 stop_loss   = entry + sl_mult * atr_val
                 take_profit = entry - tp_mult * atr_val
 
-            # ── Confidence: base + scanner score bonus ─────────────────────
-            # 2 confirmations (EMA + MACD) → higher confidence
-            both_confirmed = (
-                (side == "buy"  and ema_long  and macd_bull) or
-                (side == "sell" and ema_short and macd_bear)
+            # ── Confirmation flags per indicator layer ─────────────────────
+            # Scanner direction is the primary intent; EMA/MACD either confirm it or not.
+            ema_confirms_scanner = (
+                (scanner_direction == "long"  and ema_long) or
+                (scanner_direction == "short" and ema_short) or
+                # Standalone fallback: no scanner_direction → EMA must match chosen side
+                (scanner_direction not in ("long", "short") and
+                 ((side == "buy" and ema_long) or (side == "sell" and ema_short)))
             )
+            macd_confirms_scanner = (
+                (scanner_direction == "long"  and macd_bull) or
+                (scanner_direction == "short" and macd_bear) or
+                (scanner_direction not in ("long", "short") and
+                 ((side == "buy" and macd_bull) or (side == "sell" and macd_bear)))
+            )
+            both_confirmed = ema_confirms_scanner and macd_confirms_scanner
+
+            # Human-readable labels for audit / reporting
+            if ema_long and not ema_short:
+                ema_cross_direction = "bullish"
+            elif ema_short and not ema_long:
+                ema_cross_direction = "bearish"
+            else:
+                ema_cross_direction = "none"
+            macd_hist_direction = "positive" if hist.iloc[-1] > 0 else "negative"
+
+            if both_confirmed:
+                entry_reason = "scanner+ema+macd"
+            elif ema_confirms_scanner:
+                entry_reason = "scanner+ema_only"
+            elif macd_confirms_scanner:
+                entry_reason = "scanner+macd_only"
+            else:
+                entry_reason = "scanner_only"
+
+            # ── Confidence: base + scanner score bonus ─────────────────────
+            confidence_base = int(round(min(70.0 + scanner_score / 10.0, 85.0)))
             confidence = 70.0
             if both_confirmed:
                 confidence += 10.0
             confidence += min(15.0, scanner_score / 10)   # up to +15 from score
             confidence = min(confidence, 95.0)
+            confidence_final = int(round(confidence))
 
-            # ── Build signal snapshot for attribution ──────────────────────
+            # ── Volatility metrics ─────────────────────────────────────────
+            atr_pct_of_price = (atr_val / entry * 100.0) if entry > 0 else 0.0
+
+            # ── Build full signal snapshot for attribution ─────────────────
             signal_snapshot = {
-                "ema8":           round(float(ema8.iloc[-1]), 6),
-                "ema21":          round(float(ema21.iloc[-1]), 6),
-                "macd_hist":      round(float(hist.iloc[-1]), 6),
-                "atr":            round(atr_val, 6),
-                "scanner_score":  round(scanner_score, 2),
-                "scanner_dir":    scanner_direction,
-                "scanner_mom":    round(scanner_momentum, 6),
-                "both_confirmed": both_confirmed,
+                # Scanner layer
+                "scanner_score":          round(scanner_score, 2),
+                "scanner_direction":      scanner_direction,
+                "scanner_source":         scanner_source,
+                "scanner_volume_usd":     round(scanner_volume, 2),
+                "scanner_change_24h_pct": round(scanner_change_24h, 4),
+                "scanner_momentum":       round(scanner_momentum, 6),
+
+                # EMA layer
+                "ema8":                   round(float(ema8.iloc[-1]), 6),
+                "ema21":                  round(float(ema21.iloc[-1]), 6),
+                "ema_cross_direction":    ema_cross_direction,
+                "ema_confirms_scanner":   bool(ema_confirms_scanner),
+
+                # MACD layer
+                "macd_hist":              round(float(hist.iloc[-1]), 6),
+                "macd_hist_direction":    macd_hist_direction,
+                "macd_confirms_scanner":  bool(macd_confirms_scanner),
+
+                # Volatility
+                "atr_value":              round(atr_val, 6),
+                "atr_pct_of_price":       round(atr_pct_of_price, 4),
+
+                # Aggregate
+                "confidence_base":        confidence_base,
+                "confidence_final":       confidence_final,
+                "both_confirmed":         bool(both_confirmed),
+                "entry_reason":           entry_reason,
+
+                # Timestamps
+                "signal_timestamp":       datetime.now(timezone.utc).isoformat(),
             }
 
             sig = Signal(
