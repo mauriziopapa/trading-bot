@@ -25,6 +25,7 @@ from trading_bot.strategies.rsi_macd import RSIMACDStrategy
 from trading_bot.strategies.bollinger import BollingerStrategy
 from trading_bot.strategies.breakout import BreakoutStrategy
 from trading_bot.strategies.scalping import ScalpingStrategy
+from trading_bot.strategies.momentum import MomentumStrategy
 
 from trading_bot.utils.emerging_scanner import EmergingScanner
 from trading_bot.utils.sniper_scanner_v2 import SniperScannerV2
@@ -102,12 +103,17 @@ class TradingBot:
             "DOGE/USDT:USDT"
         ]
 
-        self.strategies = [
-            ScalpingStrategy(),
-            BreakoutStrategy(),
-            RSIMACDStrategy(),
-            BollingerStrategy()
-        ]
+        # All strategy instances — which ones actually run is controlled by
+        # STRATEGIES_ENABLED in bot_config (enforced in _get_enabled_strategies)
+        self._all_strategies = {
+            "SCALPING":  ScalpingStrategy(),
+            "BREAKOUT":  BreakoutStrategy(),
+            "RSI_MACD":  RSIMACDStrategy(),
+            "BOLLINGER": BollingerStrategy(),
+            "MOMENTUM":  MomentumStrategy(),
+        }
+        # Legacy alias (used by some internal paths that iterate self.strategies)
+        self.strategies = list(self._all_strategies.values())
 
         self.runtime = {
             "signals": [],
@@ -138,6 +144,8 @@ class TradingBot:
         self.risk.db = self.db
         self._recover_positions_from_exchange()
 
+        # Log which strategies are active (paper guard)
+        self._log_active_strategies()
         self._notify_startup()
         self._setup_scheduler()
 
@@ -295,6 +303,37 @@ class TradingBot:
 
 
 # ==========================================================
+# STRATEGY GUARD
+# ==========================================================
+
+    def _get_enabled_strategies(self) -> list:
+        """
+        Return only strategy instances whose NAME is in STRATEGIES_ENABLED config.
+        Logs a [REFACTOR-GUARD] warning for every disabled strategy that tries to run.
+        Defaults to MOMENTUM-only if STRATEGIES_ENABLED not set.
+        """
+        raw = str(getattr(settings, "STRATEGIES_ENABLED", "MOMENTUM"))
+        enabled_names = {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+        active = []
+        for name, strat in self._all_strategies.items():
+            if name in enabled_names:
+                active.append(strat)
+            else:
+                logger.debug(
+                    f"[REFACTOR-GUARD] {name} not in STRATEGIES_ENABLED={enabled_names} — skipped"
+                )
+        return active
+
+    def _log_active_strategies(self):
+        enabled = [s.NAME for s in self._get_enabled_strategies()]
+        mode = "PAPER" if not settings.IS_LIVE else "LIVE"
+        logger.info(f"[STRATEGY GUARD] mode={mode} active_strategies={enabled}")
+        if enabled == ["MOMENTUM"]:
+            logger.info("[MOMENTUM strategy active, others disabled]")
+
+
+# ==========================================================
 # SCHEDULER
 # ==========================================================
 
@@ -409,38 +448,28 @@ class TradingBot:
                         continue
 
                     signal = None
+                    enabled_strats = self._get_enabled_strategies()
 
                     # ==================================================
-                    # STRATEGY ENGINE
+                    # STRATEGY ENGINE — only enabled strategies run
                     # ==================================================
-                    for strat in self.strategies:
+                    for strat in enabled_strats:
                         try:
-                            signal = strat.analyze(df, symbol, "futures")
+                            # MomentumStrategy gets extra scanner context
+                            if strat.NAME == "MOMENTUM":
+                                signal = strat.analyze(
+                                    df, symbol, "futures",
+                                    scanner_score=coin.get("score", 0),
+                                    scanner_direction=coin.get("direction", ""),
+                                    scanner_momentum=coin.get("momentum", 0),
+                                    scanner_volume=coin.get("volume", 0),
+                                )
+                            else:
+                                signal = strat.analyze(df, symbol, "futures")
                             if signal:
                                 break
                         except Exception as e:
-                            logger.debug(f"[STRAT ERROR] {symbol} {e}")
-
-                    # ==================================================
-                    # SCANNER DIRECTION FALLBACK
-                    # If strategies produce nothing, use scanner's
-                    # momentum direction as signal (it already computed
-                    # momentum from 20x 1m candles).
-                    # ==================================================
-                    if not signal:
-                        direction = coin.get("direction", "")
-                        momentum = abs(coin.get("momentum", 0))
-                        score = coin.get("score", 0)
-
-                        # Only use scanner direction if score is meaningful
-                        if score >= 20 and momentum >= 0.001:
-                            side = "buy" if direction == "long" else "sell"
-                            signal = type("Signal", (), {
-                                "symbol": symbol,
-                                "side": side,
-                                "strategy": "sniper_scanner_v2",
-                                "confidence": min(0.9, 0.5 + score / 200)
-                            })()
+                            logger.debug(f"[STRAT ERROR] {symbol} {strat.NAME} {e}")
 
                     # ==================================================
                     # EXECUTION
@@ -521,12 +550,30 @@ class TradingBot:
 
                 df = ohlcv_to_df(ohlcv)
 
-                for strat in self.strategies:
-                    signal = strat.analyze(df, symbol, "futures")
-                    if signal:
-                        logger.info(f"[EMERGING SIGNAL] {symbol} score={coin.get('score', 0):.1f}")
-                        self._execute_signal(signal)
-                        break
+                signal = None
+                enabled_strats = self._get_enabled_strategies()
+
+                for strat in enabled_strats:
+                    try:
+                        if strat.NAME == "MOMENTUM":
+                            signal = strat.analyze(
+                                df, symbol, "futures",
+                                scanner_score=coin.get("score", 0),
+                                scanner_direction=coin.get("direction", ""),
+                                scanner_momentum=coin.get("momentum", 0),
+                                scanner_volume=coin.get("volume", 0),
+                            )
+                        else:
+                            signal = strat.analyze(df, symbol, "futures")
+                        if signal:
+                            break
+                    except Exception as e:
+                        logger.debug(f"[STRAT ERROR] {symbol} {strat.NAME} {e}")
+
+                if signal:
+                    logger.info(f"[EMERGING SIGNAL] {symbol} score={coin.get('score', 0):.1f}")
+                    self._execute_signal(signal)
+                    break
 
         except Exception as e:
             logger.error(f"[EMERGING] {e}")
@@ -549,7 +596,17 @@ class TradingBot:
 
             symbol = signal.symbol
             side = signal.side
-            strategy = getattr(signal, "strategy", "sniper")
+            strategy = getattr(signal, "strategy", "") or "UNKNOWN"
+
+            # ==================================================
+            # PAPER GUARD — belt-and-suspenders for MOMENTUM
+            # Primary control is TRADING_MODE=paper env var
+            # ==================================================
+            if getattr(settings, "IS_LIVE", False) and strategy == "MOMENTUM":
+                logger.warning(
+                    "[PAPER-GUARD] IS_LIVE=True but MOMENTUM strategy — "
+                    "primary control is TRADING_MODE env var; verify paper mode is set"
+                )
 
             # ==================================================
             # SIGNAL DEDUP — prevent executing same signal twice
@@ -688,6 +745,7 @@ class TradingBot:
                 # Persist to DB
                 try:
                     order_id = order.get("id", f"ord_{int(time.time())}_{symbol}")
+                    entry_fees = notional * 0.0006   # Bitget taker ~0.06%
                     self.db.save_trade_open(
                         order_id=order_id,
                         symbol=symbol, market="futures", strategy=strategy,
@@ -695,8 +753,12 @@ class TradingBot:
                         stop_loss=trade["stop_loss"],
                         take_profit=trade["take_profit"],
                         confidence=getattr(signal, "confidence", 0.7),
-                        atr=0, notes="", timeframe="1m",
+                        atr=getattr(signal, "atr", 0) or 0,
+                        notes=getattr(signal, "notes", "") or "",
+                        timeframe=getattr(signal, "timeframe", "1m") or "1m",
                         leverage=leverage,
+                        fees_paid=entry_fees,
+                        signal_snapshot=getattr(signal, "_snapshot", None),
                     )
                 except Exception as db_err:
                     logger.warning(f"[DB] save_trade_open failed: {db_err}")
@@ -1065,9 +1127,11 @@ class TradingBot:
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
 
             try:
+                exit_fees = real_size * price * 0.0006 if entry > 0 else 0.0  # taker fee on notional
                 self.db.close_position_by_symbol(
                     symbol=symbol, exit_price=price,
                     pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
+                    fees_paid=exit_fees,
                 )
             except Exception as db_err:
                 logger.warning(f"[DB] close failed: {db_err}")
