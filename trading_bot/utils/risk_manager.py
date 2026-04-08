@@ -351,6 +351,16 @@ class RiskManager:
             return 0.0
         return (time.time() - self._global_stop_since) / 60
 
+    def manual_unlock(self, reason: str = ""):
+        """
+        Runtime-only unlock of global_stop. Resets all stop state.
+        Does NOT persist — caller must ensure legitimacy (e.g. MANUAL_UNLOCK_REQUIRED check).
+        """
+        self.global_stop = False
+        self._global_stop_reason = ""
+        self._global_stop_since = 0.0
+        logger.warning(f"[MANUAL UNLOCK] global_stop reset, reason={reason!r}")
+
 # ==========================================================
 # CAPITAL & EXPOSURE CONTROL
 # ==========================================================
