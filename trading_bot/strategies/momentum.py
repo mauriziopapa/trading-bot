@@ -118,32 +118,35 @@ class MomentumStrategy(BaseStrategy):
             macd_bull = hist.iloc[-1] > 0
             macd_bear = hist.iloc[-1] < 0
 
-            # ── Determine side ─────────────────────────────────────────────
-            side: Optional[str] = None
-
+            # ── Determine intended side from scanner ───────────────────────
             if scanner_direction == "long":
-                if ema_long and macd_bull:
-                    side = "buy"
-                elif ema_long:
-                    # Partial confirmation — lower confidence
-                    side = "buy"
+                side = "buy"
+                ema_ok = ema_long
+                macd_ok = macd_bull
             elif scanner_direction == "short":
-                if ema_short and macd_bear:
-                    side = "sell"
-                elif ema_short:
-                    side = "sell"
+                side = "sell"
+                ema_ok = ema_short
+                macd_ok = macd_bear
             else:
-                # No scanner direction — use EMA+MACD standalone
+                # Standalone fallback: use whichever direction EMA+MACD both agree
                 if ema_long and macd_bull:
-                    side = "buy"
+                    side, ema_ok, macd_ok = "buy", True, True
                 elif ema_short and macd_bear:
-                    side = "sell"
+                    side, ema_ok, macd_ok = "sell", True, True
+                else:
+                    logger.debug(
+                        f"[MOMENTUM REJECT] {symbol} reason=no_scanner_direction_and_no_agreement"
+                    )
+                    return None
 
-            if side is None:
-                logger.debug(
-                    f"[MOMENTUM] {symbol} no EMA/MACD confirmation "
-                    f"(scanner_dir={scanner_direction} ema_long={ema_long} macd_bull={macd_bull})"
-                )
+            # ── MANDATORY DUAL CONFIRMATION ────────────────────────────────
+            # Neither ema_only nor macd_only is accepted. Both must agree with
+            # the scanner direction, or the signal is rejected.
+            if not ema_ok:
+                logger.info(f"[MOMENTUM REJECT] {symbol} reason=ema_not_confirming")
+                return None
+            if not macd_ok:
+                logger.info(f"[MOMENTUM REJECT] {symbol} reason=macd_not_confirming")
                 return None
 
             # ── ATR for SL/TP ──────────────────────────────────────────────
@@ -153,6 +156,36 @@ class MomentumStrategy(BaseStrategy):
 
             entry = _safe_float(close.iloc[-1])
             if entry <= 0:
+                return None
+
+            # ── ATR range gate ─────────────────────────────────────────────
+            # Too-low ATR = insufficient room for R:R after fees.
+            # Too-high ATR = stop-loss so wide position sizing becomes unsafe.
+            atr_pct = (atr_val / entry * 100.0) if entry > 0 else 0.0
+            if atr_pct < 0.5:
+                logger.info(
+                    f"[MOMENTUM REJECT] {symbol} reason=atr_too_low ({atr_pct:.3f}%)"
+                )
+                return None
+            if atr_pct > 5.0:
+                logger.info(
+                    f"[MOMENTUM REJECT] {symbol} reason=atr_too_high ({atr_pct:.3f}%)"
+                )
+                return None
+
+            # ── Expected-value gate (EV > 3 × round-trip fees) ─────────────
+            # Reference notional cancels in the comparison (ratio-based).
+            # expected_profit = notional * tp_mult * atr_pct / 100
+            # fee_cost        = notional * 0.0006 * 2   (entry + exit taker)
+            # Require expected_profit >= 3 × fee_cost
+            ref_notional = 100.0  # arbitrary; both sides scale linearly
+            expected_profit_usdt = ref_notional * tp_mult * atr_pct / 100.0
+            fee_cost_usdt = ref_notional * 0.0006 * 2
+            if expected_profit_usdt < 3 * fee_cost_usdt:
+                logger.info(
+                    f"[MOMENTUM REJECT] {symbol} reason=ev_below_3x_fees "
+                    f"(ep={expected_profit_usdt:.4f} vs 3x_fees={3 * fee_cost_usdt:.4f})"
+                )
                 return None
 
             if side == "buy":
