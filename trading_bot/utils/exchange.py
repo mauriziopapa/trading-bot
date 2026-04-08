@@ -486,8 +486,17 @@ class BitgetExchange:
             params = params or {}
 
             if market == "futures":
-                params["marginMode"] = "isolated"
 
+                is_closing = params.get("reduceOnly", False)
+
+                params = {
+                    "marginMode": "isolated",
+                    "reduceOnly": bool(is_closing),
+                    "oneWayMode": True,
+                }
+
+            logger.info(f"[BITGET PARAMS] {params}")
+            
             # ==========================================================
             # EXECUTION (RETRY SAFE)
             # ==========================================================
