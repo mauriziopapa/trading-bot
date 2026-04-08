@@ -97,6 +97,65 @@ class TelegramNotifier:
             f"⏰ {_now()}"
         )
 
+    def trade_opened_v2(self, symbol: str, side: str, size: float, entry: float,
+                        stop_loss: float, take_profit: float, market: str,
+                        strategy: str, confidence: float, fees_estimated: float = 0.0,
+                        atr: float = 0.0):
+        """Attribution-aware trade open alert."""
+        if not settings.NOTIFY_TRADES:
+            return
+        emoji = "🟢" if side == "buy" else "🔴"
+        mode  = "[PAPER]" if not settings.IS_LIVE else ""
+        rr = abs(take_profit - entry) / abs(stop_loss - entry) if abs(stop_loss - entry) > 0 else 0
+        self.send(
+            f"{emoji} <b>TRADE APERTO {mode}</b>\n"
+            f"📌 {symbol} | {market.upper()}\n"
+            f"📊 {strategy} ({confidence:.0f}%)\n"
+            f"{'Dir':10}: {'LONG' if side=='buy' else 'SHORT'}\n"
+            f"{'Entry':10}: {entry:.6g}\n"
+            f"{'SL':10}: {stop_loss:.6g}\n"
+            f"{'TP':10}: {take_profit:.6g}\n"
+            f"{'R:R':10}: 1:{rr:.1f}\n"
+            f"{'ATR':10}: {atr:.6g}\n"
+            f"{'Fees~':10}: {fees_estimated:.4f} USDT\n"
+            f"⏰ {_now()}"
+        )
+
+    def trade_closed_v2(self, symbol: str, side: str, entry: float, exit_price: float,
+                        pnl_pct: float, pnl_usdt: float, reason: str, market: str,
+                        strategy: str = "", fees_paid: float = 0.0):
+        """Attribution-aware trade close alert with net PnL after fees."""
+        if not settings.NOTIFY_TRADES:
+            return
+        net_usdt = pnl_usdt - fees_paid
+        emoji = "✅" if pnl_pct > 0 else "❌"
+        self.send(
+            f"{emoji} <b>TRADE CHIUSO</b>\n"
+            f"📌 {symbol} | {market.upper()}\n"
+            f"📊 {strategy} | {reason.upper()}\n"
+            f"{'Entry':10}: {entry:.6g}\n"
+            f"{'Exit':10}: {exit_price:.6g}\n"
+            f"{'PnL':10}: {pnl_pct:+.2f}% ({pnl_usdt:+.2f} USDT)\n"
+            f"{'Fees':10}: {fees_paid:.4f} USDT\n"
+            f"{'Net':10}: {net_usdt:+.2f} USDT\n"
+            f"⏰ {_now()}"
+        )
+
+    def stale_global_stop_alert(self, age_min: float, reason: str = ""):
+        """Alert sent when global_stop has been active longer than threshold."""
+        reason_str = f" ({reason})" if reason else ""
+        self.send(
+            f"🚨 <b>GLOBAL STOP ATTIVO {age_min:.0f} MIN</b>{reason_str}\n"
+            f"Il bot ha smesso di tradare. Richiede sblocco manuale.\n"
+            f"⏰ {_now()}"
+        )
+
+    def daily_report_v2(self, report_text: str):
+        """Send a pre-formatted daily strategy report."""
+        if not settings.NOTIFY_DAILY_REPORT:
+            return
+        self.send(report_text)
+
     def circuit_breaker(self, reason: str):
         self.send(f"🚨 <b>CIRCUIT BREAKER ATTIVATO</b>\n{reason}\nBot in pausa fino a reset giornaliero.")
 

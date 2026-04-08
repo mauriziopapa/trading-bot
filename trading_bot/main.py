@@ -343,9 +343,26 @@ class TradingBot:
         schedule.every(2).minutes.do(self._scan_emerging)
         schedule.every(20).seconds.do(self._monitor_positions)
         schedule.every(2).minutes.do(self._update_sentiment)
+        schedule.every().day.at("00:00").do(self._send_daily_report)
 
         if DASHBOARD_ENABLED:
             schedule.every(10).seconds.do(self._update_dashboard)
+
+
+# ==========================================================
+# DAILY REPORT
+# ==========================================================
+
+    def _send_daily_report(self):
+        try:
+            from trading_bot.reporting.strategy_report import daily_strategy_report, format_daily_report
+            balance = safe_float(self.exchange.get_usdt_balance("futures"))
+            report = daily_strategy_report(self.db, days=1)
+            mode = "live" if settings.IS_LIVE else "paper"
+            msg = format_daily_report(report, balance, mode)
+            self.notifier.daily_report_v2(msg)
+        except Exception as e:
+            logger.error(f"[DAILY REPORT] {e}")
 
 
 # ==========================================================
@@ -734,7 +751,8 @@ class TradingBot:
                     "stop_loss": stop_loss,
                     "take_profit": take_profit,
                     "created_at": time.time(),
-                    "market": "futures"
+                    "market": "futures",
+                    "strategy": strategy,
                 }
 
                 # register_open releases the pending lock internally
@@ -763,7 +781,7 @@ class TradingBot:
                 except Exception as db_err:
                     logger.warning(f"[DB] save_trade_open failed: {db_err}")
 
-                self.notifier.trade_opened(
+                self.notifier.trade_opened_v2(
                     symbol=symbol,
                     side=side,
                     entry=price,
@@ -772,7 +790,9 @@ class TradingBot:
                     take_profit=trade["take_profit"],
                     market="futures",
                     strategy=strategy,
-                    confidence=getattr(signal, "confidence", 0.7)
+                    confidence=getattr(signal, "confidence", 0.7),
+                    fees_estimated=entry_fees,
+                    atr=getattr(signal, "atr", 0) or 0,
                 )
 
                 logger.info(f"[TRADE OPEN] {symbol}")
@@ -814,11 +834,27 @@ class TradingBot:
             self.risk.update_balance(balance)
             self.risk.check_global_risk(balance)
 
+            # ==================================================
+            # STALE GLOBAL STOP ALERT
+            # ==================================================
+            if self.risk.global_stop:
+                age_min = self.risk.global_stop_age_minutes()
+                threshold = float(getattr(settings, "STALE_GLOBAL_STOP_ALERT_MIN", 15))
+                if age_min >= threshold and not getattr(self, "_stale_stop_alerted", False):
+                    self.notifier.stale_global_stop_alert(age_min, self.risk._global_stop_reason)
+                    self._stale_stop_alerted = True
+                    logger.warning(
+                        f"[RISK] stale global_stop alert sent — active {age_min:.1f}min"
+                    )
+            elif getattr(self, "_stale_stop_alerted", False):
+                self._stale_stop_alerted = False   # reset when global_stop clears
+
             exposure = self.risk.calculate_exposure(exchange_positions, balance)
 
             logger.info(
                 f"[STATE] positions={len(open_trades)} "
                 f"balance={balance:.2f} exposure={exposure:.2f} "
+                f"block={self.risk.get_block_reason()} "
                 f"symbols={list(self.risk.open_futures.keys())}"
             )
 
@@ -1126,8 +1162,9 @@ class TradingBot:
 
             self.risk.register_close(symbol, pnl_pct, "futures", reason)
 
+            exit_fees = real_size * price * 0.0006 if entry > 0 else 0.0  # Bitget taker fee on notional
+
             try:
-                exit_fees = real_size * price * 0.0006 if entry > 0 else 0.0  # taker fee on notional
                 self.db.close_position_by_symbol(
                     symbol=symbol, exit_price=price,
                     pnl_pct=pnl_pct, pnl_usdt=pnl_usdt, reason=reason,
@@ -1136,11 +1173,13 @@ class TradingBot:
             except Exception as db_err:
                 logger.warning(f"[DB] close failed: {db_err}")
 
-            self.notifier.trade_closed(
+            self.notifier.trade_closed_v2(
                 symbol=symbol, side=trade["side"],
                 entry=entry, exit_price=price,
                 pnl_pct=pnl_pct, pnl_usdt=pnl_usdt,
-                reason=reason, market="futures"
+                reason=reason, market="futures",
+                strategy=trade.get("strategy", ""),
+                fees_paid=exit_fees,
             )
 
             logger.info(
