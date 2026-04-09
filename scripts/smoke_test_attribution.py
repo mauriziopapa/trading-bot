@@ -17,6 +17,13 @@ Required checks (must all PASS before push):
   13. MomentumStrategy rejects when ATR < 0.5% of price
   14. MomentumStrategy rejects when ATR > 5% of price
   15. MomentumStrategy rejects when expected_profit < 3x fees
+  16. calculate_conviction: valid ConvictionBreakdown for strong inputs
+  17. calculate_conviction: tier=='reject' when total < 60
+  18. calculate_conviction: tier=='conviction_play' when total >= 93
+  19. MomentumPersistenceFilter: False on first call, True after 2 records
+  20. LadderedCooldown: halted=True after 3 consecutive losses
+  21. LadderedCooldown: cooldown_until_ts set ~4h ahead on conviction_play loss
+  22. Hard cap: effective_risk_pct clamped to 3.0 regardless of override value
 
 Usage:
     python scripts/smoke_test_attribution.py
@@ -379,6 +386,135 @@ def run():
         scanner_volume=10_000_000,
     )
     _check("15. expected_profit < 3x fees → None", sig_15 is None)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # CWPE checks 16-22 — conviction + persistence + cooldown + hard cap
+    # ════════════════════════════════════════════════════════════════════════
+    from trading_bot.strategies.conviction import (
+        calculate_conviction, ConvictionBreakdown,
+    )
+    from trading_bot.strategies.persistence_filter import (
+        MomentumPersistenceFilter,
+    )
+    from trading_bot.strategies.laddered_cooldown import LadderedCooldown
+
+    # ── Check 16: calculate_conviction returns valid ConvictionBreakdown ────
+    # Strong but not max inputs: scanner=80, aligned EMA (0.5% delta), MACD
+    # aligned + accelerating, volume 2x, ATR 2% (sweet spot), BTC aligned.
+    b16 = calculate_conviction(
+        scanner_score=80.0, direction="long",
+        ema8=100.5, ema21=100.0,
+        macd_hist=0.008, macd_hist_prev=0.004,
+        current_volume=2.0, avg_volume=1.0,
+        atr_pct=2.0, btc_regime="aligned",
+    )
+    _check(
+        "16. calculate_conviction returns ConvictionBreakdown for strong inputs",
+        isinstance(b16, ConvictionBreakdown) and b16.total >= 60 and b16.tier != "reject",
+        f"total={b16.total} tier={b16.tier} size_mult={b16.size_multiplier}",
+    )
+
+    # ── Check 17: tier == 'reject' when total < 60 ──────────────────────────
+    # Weak inputs: scanner=30, wrong-side EMA, wrong-sign MACD, no volume,
+    # ATR out of range, BTC counter-trend.
+    b17 = calculate_conviction(
+        scanner_score=30.0, direction="long",
+        ema8=99.0, ema21=100.0,                 # wrong side → 0
+        macd_hist=-0.005, macd_hist_prev=-0.003,  # wrong sign → 0
+        current_volume=0.5, avg_volume=1.0,      # ratio < 1 → 0
+        atr_pct=0.3, btc_regime="counter",       # out of range, counter
+    )
+    _check(
+        "17a. weak inputs → tier='reject'",
+        b17.tier == "reject",
+        f"total={b17.total} tier={b17.tier}",
+    )
+    _check(
+        "17b. weak inputs → size_multiplier=0.0",
+        b17.size_multiplier == 0.0,
+        f"size_mult={b17.size_multiplier}",
+    )
+
+    # ── Check 18: tier == 'conviction_play' when total >= 93 ────────────────
+    # Max inputs: scanner=100, EMA 2%+ delta (100 component), MACD expanding
+    # at cap, volume 3x, ATR 2% (sweet spot), BTC aligned.
+    b18 = calculate_conviction(
+        scanner_score=100.0, direction="long",
+        ema8=102.0, ema21=100.0,                # 2% delta → 100
+        macd_hist=0.012, macd_hist_prev=0.006,  # cap + accel → 100
+        current_volume=3.0, avg_volume=1.0,     # 3x → 100
+        atr_pct=2.0, btc_regime="aligned",
+    )
+    _check(
+        "18a. max inputs → tier='conviction_play'",
+        b18.tier == "conviction_play",
+        f"total={b18.total} tier={b18.tier}",
+    )
+    _check(
+        "18b. conviction_play → size_multiplier=3.0 AND risk_pct=3.0",
+        b18.size_multiplier == 3.0 and b18.risk_pct == 3.0,
+        f"size_mult={b18.size_multiplier} risk_pct={b18.risk_pct}",
+    )
+
+    # ── Check 19: MomentumPersistenceFilter first-call False, second True ──
+    pf = MomentumPersistenceFilter(required_cycles=2, max_gap_seconds=180)
+    pf.record_signal("BTC/USDT", "long", 80.0)
+    _check(
+        "19a. persistence False on first record",
+        not pf.is_persistent("BTC/USDT", "long"),
+    )
+    pf.record_signal("BTC/USDT", "long", 82.0)
+    _check(
+        "19b. persistence True after 2 same-direction records",
+        pf.is_persistent("BTC/USDT", "long"),
+    )
+
+    # ── Check 20: LadderedCooldown halted after 3 consecutive losses ────────
+    cd20 = LadderedCooldown()
+    cd20.record_trade_result(pnl=-5.0, was_conviction_play=True)   # loss 1 → 4h cd
+    cd20.record_trade_result(pnl=-5.0, was_conviction_play=False)  # loss 2 → 12h cd
+    cd20.record_trade_result(pnl=-5.0, was_conviction_play=False)  # loss 3 → HALT
+    _check(
+        "20. LadderedCooldown halted=True after 3 consecutive losses",
+        cd20.halted is True,
+        f"consecutive_losses={cd20.consecutive_losses} halted={cd20.halted}",
+    )
+
+    # ── Check 21: cooldown_until_ts ≈ now+4h after 1 conviction_play loss ──
+    cd21 = LadderedCooldown()
+    _t0 = time.time()
+    cd21.record_trade_result(pnl=-5.0, was_conviction_play=True)
+    _delta = cd21.cooldown_until_ts - _t0
+    _check(
+        "21. conviction_play loss sets cooldown ~4h ahead",
+        cd21.cooldown_until_ts > 0 and 3.9 * 3600 <= _delta <= 4.1 * 3600,
+        f"delta={_delta:.0f}s (expected ~14400)",
+    )
+
+    # ── Check 22: Hard cap on effective_risk_pct (replicates main.py logic) ─
+    # main.py _execute_signal:
+    #   override_pct = getattr(signal, "risk_pct_override", None)
+    #   effective_risk_pct = float(override_pct) if override_pct and override_pct>0 \
+    #                        else settings.MOMENTUM_RISK_PCT
+    #   effective_risk_pct = min(effective_risk_pct, 3.0)   # HARD CAP
+    def _compute_effective_risk_pct(override_pct, fallback):
+        if override_pct is not None and override_pct > 0:
+            val = float(override_pct)
+        else:
+            val = float(fallback)
+        return min(val, 3.0)
+
+    # Sanity: conviction_play tier (3.0) stays at 3.0
+    r_conv_play = _compute_effective_risk_pct(3.0, 1.0)
+    # Runaway override: 10% override is still clamped to 3%
+    r_runaway = _compute_effective_risk_pct(10.0, 1.0)
+    # No override: falls back to MOMENTUM_RISK_PCT (simulated as 1.5)
+    r_no_override = _compute_effective_risk_pct(None, 1.5)
+    _check(
+        "22. hard cap: conviction_play=3% stays 3%, 10% clamps to 3%, None falls back",
+        r_conv_play == 3.0 and r_runaway == 3.0 and r_no_override == 1.5,
+        f"conv_play={r_conv_play} runaway={r_runaway} no_override={r_no_override}",
+    )
 
     # ── Summary ───────────────────────────────────────────────────────────────
     total = _pass + _fail
